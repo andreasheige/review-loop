@@ -1,0 +1,22 @@
+{
+  "id": "sec-reviewloop-c4d0e2a9f113",
+  "reasoning": "An assertion was deleted from a protected test file.",
+  "lens": "security",
+  "surface": "code",
+  "title": "Assertion removed from tests/auth.test.ts",
+  "sites": [
+    {
+      "path": "tests/auth.test.ts",
+      "start_line": 88,
+      "end_line": 88
+    }
+  ],
+  "failure_scenario": null,
+  "evidence": {
+    "kind": "tool",
+    "ref": "review-loop@0.1.0:deleted-assertion"
+  },
+  "rule_class": "control-weakening",
+  "introduced_by": "diff",
+  "status": "needs_human"
+}

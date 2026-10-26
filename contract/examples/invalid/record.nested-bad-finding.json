@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "command": "eot",
+  "key": {
+    "patch_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_ref": "origin/main",
+    "merge_base": null
+  },
+  "round": 1,
+  "created_at": "2026-10-26T21:50:00+01:00",
+  "author_family": "claude",
+  "intent_source": "ticket",
+  "workers": [
+    {
+      "role": "finder",
+      "family": "gpt",
+      "harness": "codex",
+      "model": "gpt-5.4",
+      "wall_seconds": 212,
+      "tokens": 900000
+    },
+    {
+      "role": "verifier",
+      "family": "gpt",
+      "harness": "codex",
+      "model": "gpt-5.4"
+    }
+  ],
+  "tools": {
+    "gitleaks": "8.28.0"
+  },
+  "reviewed_paths": [
+    "api/invoices.ts",
+    "src/x.ts",
+    "tests/auth.test.ts"
+  ],
+  "findings": [
+    {
+      "id": "sec-gitleaks-3fa9c01d77be",
+      "reasoning": "gitleaks rule reviewloop-canary matched an added line.",
+      "lens": "security",
+      "surface": "secret",
+      "title": "Canary secret added in src/x.ts",
+      "sites": [
+        {
+          "path": "src/x.ts",
+          "start_line": 12,
+          "end_line": 12
+        }
+      ],
+      "failure_scenario": null,
+      "evidence": {
+        "kind": "tool",
+        "ref": "gitleaks@8.28.0:reviewloop-canary",
+        "artifact": "sarif/gitleaks.sarif"
+      },
+      "rule_class": "secret",
+      "introduced_by": "diff",
+      "status": "hard"
+    },
+    {
+      "id": "rev-9b2e41c07a55",
+      "reasoning": "getInvoice reads invoice by id without checking the caller owns it; the route is reachable by any signed-in user.",
+      "lens": "security",
+      "surface": "code",
+      "cwe": "CWE-639",
+      "title": "Missing ownership check in getInvoice",
+      "body": "The new handler skips the ownerId comparison the old one did.",
+      "sites": [
+        {
+          "path": "api/invoices.ts",
+          "start_line": 40,
+          "end_line": 52
+        }
+      ],
+      "failure_scenario": {
+        "input": "user B GETs /invoices/<id owned by A>",
+        "expected": "403",
+        "actual": "200 with A's invoice"
+      },
+      "evidence": {
+        "kind": "trace",
+        "ref": null
+      },
+      "rule_class": null,
+      "introduced_by": "diff",
+      "verification": {
+        "verdict": "confirmed",
+        "reasoning": "Traced route -> handler; no ownership guard on any path.",
+        "counter_evidence": null,
+        "family": "gpt"
+      },
+      "status": "hard"
+    },
+    {
+      "id": "sec-reviewloop-c4d0e2a9f113",
+      "reasoning": "An assertion was deleted from a protected test file.",
+      "lens": "security",
+      "surface": "code",
+      "title": "Assertion removed from tests/auth.test.ts",
+      "sites": [
+        {
+          "path": "tests/auth.test.ts",
+          "start_line": 88,
+          "end_line": 88
+        }
+      ],
+      "failure_scenario": null,
+      "evidence": {
+        "kind": "tool",
+        "ref": "review-loop@0.1.0:deleted-assertion"
+      },
+      "rule_class": "control-weakening",
+      "introduced_by": "diff",
+      "status": "needs_human"
+    }
+  ],
+  "outcome": {
+    "exit_code": 1,
+    "summary": "blocked"
+  }
+}

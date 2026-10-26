@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review-loop/contract/accept.schema.json",
+  "title": "review-loop accept (one line of accepts.jsonl)",
+  "description": "Written only by `review-loop accept` after an interactive TTY confirmation. Stored at $(git rev-parse --git-common-dir)/review-loop/accepts.jsonl. Keyed by (finding_id, rule_class), never by patch-id; re-evaluated live by `gate`. A review accept (rule_class=review) never clears a deterministic or needs_human finding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["finding_id", "rule_class", "reason", "expires", "accepted_at", "tty"],
+  "properties": {
+    "finding_id": {"type": "string", "pattern": "^(sec-[a-z0-9]+|rev)-[0-9a-f]{12}$"},
+    "rule_class": {
+      "enum": ["review", "secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "dep-young", "sast", "workflow", "control-weakening"]
+    },
+    "reason": {"type": "string", "minLength": 10},
+    "expires": {
+      "description": "Required for every security class; null only for review accepts.",
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "accepted_at": {"type": "string", "format": "date-time"},
+    "tty": {"const": true},
+    "patch_id": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Informational only; the accept is not scoped to it."}
+  },
+  "allOf": [
+    {"if": {"properties": {"rule_class": {"not": {"const": "review"}}}}, "then": {"properties": {"expires": {"type": "string"}}}},
+    {"if": {"properties": {"rule_class": {"const": "review"}}}, "then": {"properties": {"finding_id": {"pattern": "^rev-"}}}}
+  ]
+}

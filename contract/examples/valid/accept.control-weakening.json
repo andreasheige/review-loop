@@ -1,0 +1,8 @@
+{
+  "finding_id": "sec-reviewloop-c4d0e2a9f113",
+  "rule_class": "control-weakening",
+  "reason": "Assertion duplicated in tests/auth.integration.test.ts:31.",
+  "expires": "2026-11-09",
+  "accepted_at": "2026-10-26T21:55:00+01:00",
+  "tty": true
+}

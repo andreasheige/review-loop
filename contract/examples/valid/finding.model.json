@@ -1,0 +1,34 @@
+{
+  "id": "rev-9b2e41c07a55",
+  "reasoning": "getInvoice reads invoice by id without checking the caller owns it; the route is reachable by any signed-in user.",
+  "lens": "security",
+  "surface": "code",
+  "cwe": "CWE-639",
+  "title": "Missing ownership check in getInvoice",
+  "body": "The new handler skips the ownerId comparison the old one did.",
+  "sites": [
+    {
+      "path": "api/invoices.ts",
+      "start_line": 40,
+      "end_line": 52
+    }
+  ],
+  "failure_scenario": {
+    "input": "user B GETs /invoices/<id owned by A>",
+    "expected": "403",
+    "actual": "200 with A's invoice"
+  },
+  "evidence": {
+    "kind": "trace",
+    "ref": null
+  },
+  "rule_class": null,
+  "introduced_by": "diff",
+  "verification": {
+    "verdict": "confirmed",
+    "reasoning": "Traced route -> handler; no ownership guard on any path.",
+    "counter_evidence": null,
+    "family": "gpt"
+  },
+  "status": "blocking"
+}

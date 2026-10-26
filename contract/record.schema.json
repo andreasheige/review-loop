@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review-loop/contract/record.schema.json",
+  "title": "review-loop record (one per patch-id and round)",
+  "description": "Stored at $(git rev-parse --git-common-dir)/review-loop/<patch-id>/round-<n>/record.json. Never committed. Holds no transcript content and no secret values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "key", "round", "created_at", "author_family", "reviewed_paths", "findings", "outcome"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "command": {"enum": ["scan", "eot", "recheck", "epic", "ui", "gate", "sweep"]},
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["patch_id", "base_ref", "merge_base"],
+      "properties": {
+        "patch_id": {
+          "description": "git diff -U0 $(git merge-base <base> HEAD) HEAD | git patch-id --stable",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "base_ref": {"type": "string", "description": "Stored so the gate never guesses the base."},
+        "merge_base": {
+          "description": "EOE records are keyed by (patch_id, merge_base); EOT records set null.",
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "round": {"type": "integer", "minimum": 1, "maximum": 3},
+    "created_at": {"type": "string", "format": "date-time"},
+    "author_family": {
+      "description": "From the model in use, never from the harness. unknown -> both families find and both must confirm.",
+      "enum": ["claude", "gpt", "unknown"]
+    },
+    "intent_source": {"enum": ["ticket", "intent", "commits"]},
+    "workers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "family", "harness", "model"],
+        "properties": {
+          "role": {"enum": ["finder", "verifier", "security-finder"]},
+          "family": {"enum": ["claude", "gpt", "other"]},
+          "harness": {"enum": ["claude", "codex", "copilot", "pi"]},
+          "model": {"type": "string"},
+          "wall_seconds": {"type": "number", "minimum": 0},
+          "tokens": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "tools": {
+      "description": "Scanner versions used; each checked against tools.lock.",
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "reviewed_paths": {
+      "description": "Self-reported coverage; must equal changed files minus the eligibility skip list, else outcome error.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "findings": {"type": "array", "items": {"$ref": "finding.schema.json"}},
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exit_code", "summary"],
+      "properties": {
+        "exit_code": {
+          "description": "0 pass, 1 block, 2 needs_human, 3 tool error (block for D1/D2, needs_human for D3/D4).",
+          "enum": [0, 1, 2, 3]
+        },
+        "summary": {
+          "description": "A clean run says no_findings_reported (unverified), never secure.",
+          "enum": ["no_findings_reported (unverified)", "advisory_only", "blocked", "needs_human", "error"]
+        },
+        "error": {"type": "string"}
+      },
+      "allOf": [
+        {"if": {"properties": {"exit_code": {"const": 0}}}, "then": {"properties": {"summary": {"enum": ["no_findings_reported (unverified)", "advisory_only"]}}}},
+        {"if": {"properties": {"exit_code": {"const": 1}}}, "then": {"properties": {"summary": {"const": "blocked"}}}},
+        {"if": {"properties": {"exit_code": {"const": 2}}}, "then": {"properties": {"summary": {"const": "needs_human"}}}},
+        {"if": {"properties": {"exit_code": {"const": 3}}}, "then": {"properties": {"summary": {"const": "error"}}, "required": ["error"]}}
+      ]
+    }
+  }
+}

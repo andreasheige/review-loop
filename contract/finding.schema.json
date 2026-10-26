@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review-loop/contract/finding.schema.json",
+  "title": "review-loop finding (as stored in a record)",
+  "description": "One finding, one status. Tool hits come from the SARIF normaliser; model findings from a finder worker. Status is computed in code, never by a model.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "reasoning", "lens", "title", "sites", "failure_scenario", "evidence", "rule_class", "introduced_by", "status"],
+  "properties": {
+    "id": {
+      "description": "Stable id: no line number or commit SHA. Tool hits: sec-<tool>-<sha1(ruleId|path|K)[:12]>. Model findings: rev-<sha1(lens|path|title)[:12]>.",
+      "type": "string",
+      "pattern": "^(sec-[a-z0-9]+|rev)-[0-9a-f]{12}$"
+    },
+    "reasoning": {
+      "description": "Comes first so the model reasons before concluding. For secrets: the rule id only, never the match.",
+      "type": "string",
+      "minLength": 1
+    },
+    "lens": {"enum": ["correctness", "security", "scope", "simplify", "conformance", "seam", "ui"]},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "body": {"type": "string"},
+    "surface": {
+      "description": "Security findings only.",
+      "enum": ["secret", "dep", "code", "workflow", "agent-config"]
+    },
+    "cwe": {"type": "string", "pattern": "^CWE-[0-9]+$"},
+    "sites": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "start_line", "end_line"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "description": "Repo-relative."},
+          "start_line": {"type": "integer", "minimum": 1},
+          "end_line": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "failure_scenario": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "expected", "actual"],
+          "properties": {
+            "input": {"type": "string", "minLength": 1},
+            "expected": {"type": "string", "minLength": 1},
+            "actual": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {
+          "description": "tool = deterministic scanner hit; repro = runnable reproduction; trace = model reasoning over code; none = assertion only.",
+          "enum": ["tool", "repro", "trace", "none"]
+        },
+        "ref": {"type": ["string", "null"], "description": "tool: <tool>@<version>:<ruleId>. repro: path of the repro script in the round dir."},
+        "artifact": {"type": "string", "description": "Path of the raw SARIF/JSON in the round dir."}
+      }
+    },
+    "rule_class": {
+      "description": "Deterministic class for tool hits and NEEDS_HUMAN classes; null for plain model findings.",
+      "enum": [null, "secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "dep-young", "sast", "workflow", "control-weakening"]
+    },
+    "introduced_by": {
+      "description": "diff = hunk overlap with the reviewed range (for secrets: relative to the target remote). pre-existing findings go to backlog and never block the ticket.",
+      "enum": ["diff", "pre-existing"]
+    },
+    "verification": {
+      "description": "Non-author verifier verdict. Absent for tool hits: they never go to the model verifier.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "reasoning", "family"],
+      "properties": {
+        "verdict": {"enum": ["confirmed", "refuted", "unsure"]},
+        "reasoning": {"type": "string", "minLength": 1},
+        "counter_evidence": {"type": ["string", "null"]},
+        "family": {"enum": ["claude", "gpt", "other"]}
+      }
+    },
+    "status": {
+      "description": "Precedence hard > needs_human > proven > blocking > advisory > discarded. No model verdict removes hard or needs_human.",
+      "enum": ["hard", "needs_human", "proven", "blocking", "advisory", "discarded"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"evidence": {"properties": {"kind": {"const": "tool"}}}}},
+      "then": {
+        "properties": {
+          "id": {"pattern": "^sec-"},
+          "rule_class": {"not": {"const": null}},
+          "failure_scenario": {"type": "null"}
+        },
+        "not": {"required": ["verification"]}
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "hard"}}},
+      "then": {
+        "properties": {
+          "evidence": {"properties": {"kind": {"const": "tool"}}},
+          "introduced_by": {"const": "diff"},
+          "rule_class": {"enum": ["secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "sast", "workflow"]}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "needs_human"}}},
+      "then": {"properties": {"rule_class": {"not": {"const": null}}}}
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["blocking", "proven"]}, "evidence": {"properties": {"kind": {"not": {"const": "tool"}}}}}},
+      "then": {
+        "required": ["verification"],
+        "properties": {
+          "lens": {"enum": ["correctness", "security"]},
+          "failure_scenario": {"type": "object"},
+          "verification": {"properties": {"verdict": {"const": "confirmed"}}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "proven"}}},
+      "then": {"properties": {"evidence": {"properties": {"kind": {"const": "repro"}}}}}
+    },
+    {
+      "if": {"properties": {"lens": {"const": "security"}}, "required": ["lens"]},
+      "then": {"required": ["surface"]}
+    }
+  ]
+}

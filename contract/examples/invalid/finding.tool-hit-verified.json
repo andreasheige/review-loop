@@ -1,0 +1,29 @@
+{
+  "id": "sec-gitleaks-3fa9c01d77be",
+  "reasoning": "gitleaks rule reviewloop-canary matched an added line.",
+  "lens": "security",
+  "surface": "secret",
+  "title": "Canary secret added in src/x.ts",
+  "sites": [
+    {
+      "path": "src/x.ts",
+      "start_line": 12,
+      "end_line": 12
+    }
+  ],
+  "failure_scenario": null,
+  "evidence": {
+    "kind": "tool",
+    "ref": "gitleaks@8.28.0:reviewloop-canary",
+    "artifact": "sarif/gitleaks.sarif"
+  },
+  "rule_class": "secret",
+  "introduced_by": "diff",
+  "status": "hard",
+  "verification": {
+    "verdict": "confirmed",
+    "reasoning": "Traced route -> handler; no ownership guard on any path.",
+    "counter_evidence": null,
+    "family": "gpt"
+  }
+}
