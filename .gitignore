@@ -1,0 +1,4 @@
+# golden cases name private repos, paths and bug summaries; local only
+golden/cases.jsonl
+# red-team results list working bypasses; never publish
+redteam/results/
