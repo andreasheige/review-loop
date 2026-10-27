@@ -1,0 +1,1 @@
+{"id": "rev-3f1c2a9b8d70", "reasoning": "paging.py:7 uses number * size.", "counter_evidence": "tests pass page 0", "verdict": "refuted"}

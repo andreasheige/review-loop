@@ -1,0 +1,52 @@
+{
+  "findings": [
+    {
+      "reasoning": "search_users interpolates name into the SQL string; any quote in name ends the literal.",
+      "lens": "security",
+      "title": "SQL injection in search_users",
+      "body": "Use a parameter: WHERE name LIKE ? with ('%' + name + '%',).",
+      "surface": "code",
+      "cwe": "CWE-89",
+      "sites": [
+        {
+          "path": "users.py",
+          "start_line": 9,
+          "end_line": 11
+        }
+      ],
+      "failure_scenario": {
+        "input": "name = \"' OR '1'='1\"",
+        "expected": "rows whose name contains the text",
+        "actual": "every row"
+      },
+      "evidence": {
+        "kind": "trace",
+        "ref": null
+      },
+      "status": "blocking"
+    },
+    {
+      "reasoning": "The helper duplicates get_user's column list.",
+      "lens": "simplify",
+      "title": "Duplicated column list",
+      "body": null,
+      "surface": null,
+      "cwe": null,
+      "sites": [
+        {
+          "path": "users.py",
+          "start_line": 10,
+          "end_line": 10
+        }
+      ],
+      "failure_scenario": null,
+      "evidence": {
+        "kind": "none",
+        "ref": null
+      }
+    }
+  ],
+  "reviewed_paths": [
+    "users.py"
+  ]
+}

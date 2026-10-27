@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review-loop/contract/finder-output.schema.json",
+  "title": "review-loop finder output (one finder worker run)",
+  "description": "What a finder worker returns. Derived from finding.schema.json without id, status, rule_class, introduced_by and verification (the CLI adds those), plus reviewed_paths. Every property is required and optional ones are nullable, so the same schema works as Codex --output-schema (strict structured output) and claude --json-schema; the CLI drops nulls when it builds a stored finding. evidence.kind is trace or none: tool hits come from scanners, repro from the Phase 2 writer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "reviewed_paths"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reasoning", "lens", "title", "body", "surface", "cwe", "sites", "failure_scenario", "evidence"],
+        "properties": {
+          "reasoning": {"type": "string", "minLength": 1, "description": "Comes first so the model reasons before concluding."},
+          "lens": {"enum": ["correctness", "security", "scope", "simplify", "conformance", "seam"]},
+          "title": {"type": "string", "minLength": 1, "maxLength": 200},
+          "body": {"type": ["string", "null"]},
+          "surface": {"type": ["string", "null"], "enum": ["secret", "dep", "code", "workflow", "agent-config", null], "description": "Security findings only; null otherwise."},
+          "cwe": {"type": ["string", "null"], "pattern": "^CWE-[0-9]+$"},
+          "sites": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "start_line", "end_line"],
+              "properties": {
+                "path": {"type": "string", "minLength": 1, "description": "Repo-relative."},
+                "start_line": {"type": "integer", "minimum": 1},
+                "end_line": {"type": "integer", "minimum": 1}
+              }
+            }
+          },
+          "failure_scenario": {
+            "anyOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "expected", "actual"],
+                "properties": {
+                  "input": {"type": "string", "minLength": 1},
+                  "expected": {"type": "string", "minLength": 1},
+                  "actual": {"type": "string", "minLength": 1}
+                }
+              }
+            ]
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "ref"],
+            "properties": {
+              "kind": {"enum": ["trace", "none"]},
+              "ref": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "reviewed_paths": {
+      "description": "Self-reported coverage, repo-relative; the CLI compares it with the changed files.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

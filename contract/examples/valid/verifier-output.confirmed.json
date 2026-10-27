@@ -1,0 +1,1 @@
+{"id": "rev-3f1c2a9b8d70", "reasoning": "users.py:10 builds the query with an f-string from name; no caller escapes it.", "counter_evidence": null, "verdict": "confirmed"}

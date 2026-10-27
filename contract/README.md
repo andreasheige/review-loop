@@ -7,9 +7,11 @@ The shared contract between the review loop and the security loop: one CLI, one 
 | `finding.schema.json` | one finding as stored in a record (tool hit or model finding) |
 | `record.schema.json` | one record per patch-id and round |
 | `accept.schema.json` | one line of `accepts.jsonl` |
+| `finder-output.schema.json` | what a finder worker returns: findings without `id`/`status`/`rule_class`/`introduced_by`/`verification`, plus `reviewed_paths`; all keys required, optional ones nullable (Codex strict output) |
+| `verifier-output.schema.json` | what a verifier worker returns for one finding: `{id, reasoning, counter_evidence, verdict}` |
 | `examples/` | hand-written examples; `validate.py` checks them |
 
-Check: `uv run --offline --script contract/validate.py` (exit 0 = all examples behave as expected).
+Check: `uv run --offline --script contract/validate.py` (exit 0 = all examples behave as expected; worker-output examples are also checked against the stdlib validator in `review_loop/workers.py`).
 
 ## Status
 
