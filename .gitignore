@@ -2,3 +2,5 @@
 golden/cases.jsonl
 # red-team results list working bypasses; never publish
 redteam/results/
+# per-case reviewer output; may quote private code
+golden/results/
