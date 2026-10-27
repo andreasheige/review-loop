@@ -39,16 +39,28 @@ def claude_stdout(structured, is_error=False):
 
 
 class FakeRunner:
-    """Replays one response per call; records argv and stdin."""
+    """Replays one response per call; records argv and stdin (and env, cwd in self.envs, self.cwds)."""
 
     def __init__(self, *responses):
         self.responses = list(responses)
-        self.calls = []
+        self.calls, self.envs, self.cwds = [], [], []
 
-    def __call__(self, argv, stdin, cwd, timeout):
+    def __call__(self, argv, stdin, cwd, timeout, env):
         self.calls.append((argv, stdin))
+        self.envs.append(env)
+        self.cwds.append(cwd)
         r = self.responses.pop(0)
         return r(argv) if callable(r) else done(argv, r)
+
+
+def git_repo(parent):
+    """A one-commit git repo under parent; returns its path."""
+    repo = Path(parent) / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("x = 1\n")
+    for args in (["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "chore: init"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    return str(repo)
 
 
 def codex_writes(payload, returncode=0):
@@ -103,9 +115,10 @@ class Claude(unittest.TestCase):
         argv, stdin = fake.calls[0]
         self.assertEqual(stdin, "PROMPT")
         self.assertNotIn("PROMPT", argv)
-        for flag in ("-p", "--strict-mcp-config", "--output-format"):
+        for flag in ("-p", "--restricted", "--safe-mode", "--strict-mcp-config", "--output-format"):
             self.assertIn(flag, argv)
-        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
+        self.assertNotIn("--setting-sources", argv)  # --restricted already drops user/project/local settings
+        self.assertEqual(json.loads(argv[argv.index("--settings") + 1]), {"permissions": {"deny": ["Read(**/.env*)"]}})
         self.assertEqual(argv[argv.index("--tools") + 1], "Read,Grep,Glob")
         self.assertEqual(argv[argv.index("--model") + 1], "sonnet")
         sent = json.loads(argv[argv.index("--json-schema") + 1])
@@ -150,7 +163,7 @@ class Claude(unittest.TestCase):
             fake = FakeRunner("garbage", claude_stdout({"verdict": "confirmed"}))
             out = io.StringIO()
             with redirect_stdout(out):
-                code = workers.main(["--harness", "claude", "--role", "verify", "--input", str(prompt), "--cwd", td], fake)
+                code = workers.main(["--harness", "claude", "--role", "verify", "--input", str(prompt), "--repo", git_repo(td)], fake)
         self.assertEqual(code, 3)
         self.assertEqual(len(fake.calls), 2)
         self.assertEqual(json.loads(out.getvalue())["summary"], "error")
@@ -161,10 +174,34 @@ class Claude(unittest.TestCase):
             prompt.write_text("PROMPT")
             out = io.StringIO()
             with redirect_stdout(out):
-                code = workers.main(["--harness", "claude", "--role", "find", "--input", str(prompt), "--cwd", td],
+                code = workers.main(["--harness", "claude", "--role", "find", "--input", str(prompt), "--repo", git_repo(td)],
                                     FakeRunner(claude_stdout(GOOD_FIND)))
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out.getvalue())["output"], GOOD_FIND)
+
+    def test_cli_runs_in_scratch_worktree(self):
+        with tempfile.TemporaryDirectory() as td:
+            prompt = Path(td) / "prompt.md"
+            prompt.write_text("PROMPT")
+            repo = git_repo(td)
+            fake = FakeRunner(claude_stdout(GOOD_FIND))
+            with redirect_stdout(io.StringIO()):
+                code = workers.main(["--harness", "claude", "--role", "find", "--input", str(prompt), "--repo", repo], fake)
+            self.assertEqual(code, 0)
+            self.assertNotEqual(fake.cwds[0], repo)
+            self.assertIn("review-loop-wt-", fake.cwds[0])
+            self.assertFalse(Path(fake.cwds[0]).exists())
+            self.assertNotIn("GITHUB_TOKEN", fake.envs[0])
+
+    def test_cli_bad_rev_exits_3(self):
+        with tempfile.TemporaryDirectory() as td:
+            prompt = Path(td) / "prompt.md"
+            prompt.write_text("PROMPT")
+            fake = FakeRunner()
+            with redirect_stdout(io.StringIO()):
+                code = workers.main(["--harness", "claude", "--role", "find", "--input", str(prompt),
+                                     "--repo", git_repo(td), "--rev=--output=/tmp/x"], fake)
+        self.assertEqual((code, fake.calls), (3, []))
 
     def test_bad_cli_args_exit_3(self):
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as e, \
@@ -182,10 +219,18 @@ class Codex(unittest.TestCase):
         argv, stdin = fake.calls[0]
         self.assertEqual(stdin, "PROMPT")
         self.assertEqual(argv[-1], "-")
-        self.assertEqual(argv[argv.index("-s") + 1], "read-only")
+        self.assertNotIn("-s", argv)  # the permission profile is the sandbox
+        configs = [argv[i + 1] for i, a in enumerate(argv) if a == "-c"]
+        self.assertIn('default_permissions="review-loop"', configs)
+        self.assertTrue(any(c.startswith("permissions.review-loop.filesystem=") and '"**/.env*"="deny"' in c
+                            and "write" not in c for c in configs))
         self.assertEqual(argv[argv.index("-m") + 1], "gpt-5")
-        for flag in ("--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--output-schema", "-o"):
+        for flag in ("--ignore-user-config", "--ignore-rules", "--ephemeral", "--skip-git-repo-check",
+                     "--output-schema", "-o"):
             self.assertIn(flag, argv)
+        home = fake.envs[0]["CODEX_HOME"]
+        self.assertNotEqual(home, str(Path.home() / ".codex"))
+        self.assertFalse(Path(home).exists())  # scratch home is gone after the run
 
     def test_malformed_then_valid(self):
         fake = FakeRunner(codex_writes("{"), codex_writes(json.dumps(GOOD_VERIFY)))
@@ -210,7 +255,7 @@ class Codex(unittest.TestCase):
             prompt.write_text("PROMPT")
             fake = FakeRunner(codex_writes("[]"), codex_writes("[]"))
             with redirect_stdout(io.StringIO()):
-                code = workers.main(["--harness", "codex", "--role", "find", "--input", str(prompt), "--cwd", td], fake)
+                code = workers.main(["--harness", "codex", "--role", "find", "--input", str(prompt), "--repo", git_repo(td)], fake)
         self.assertEqual(code, 3)
 
 
@@ -232,8 +277,8 @@ def record_real():
     REAL.mkdir(parents=True, exist_ok=True)
     raw = []
 
-    def recorder(argv, stdin, cwd, timeout):
-        p = workers.default_runner(argv, stdin, cwd, timeout)
+    def recorder(argv, stdin, cwd, timeout, env):
+        p = workers.default_runner(argv, stdin, cwd, timeout, env)
         raw.append(p.stdout)
         return p
 

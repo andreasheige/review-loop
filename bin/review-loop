@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """review-loop CLI. usage: review-loop scan (--staged | --range A..B) [--sarif PATH]
-       review-loop worker --harness claude|codex --role find|verify --model M --input FILE [--cwd DIR]"""
+       review-loop worker --harness claude|codex --role find|verify --model M --input FILE [--repo DIR] [--rev REV]"""
 import os
 import sys
 

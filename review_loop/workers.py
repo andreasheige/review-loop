@@ -1,10 +1,12 @@
 """Model workers: one finder or verifier run through `claude -p` or `codex exec`, read-only, output checked.
 
-usage: review-loop worker --harness claude|codex --role find|verify --model M --input FILE [--cwd DIR]
+usage: review-loop worker --harness claude|codex --role find|verify --model M --input FILE [--repo DIR] [--rev REV]
+
+The CLI runs the worker in a stripped scratch worktree of --repo at --rev (launcher.py), never in the repo itself.
 
 `run_claude` / `run_codex` return {"output": <schema-valid JSON>, "usage": {...}, "attempts": n}. Malformed or
 missing output gets one retry with the validator error appended to the prompt, then WorkerError: the CLI exits 3,
-never 0. The runner (argv, stdin, cwd, timeout) -> CompletedProcess is injectable for tests.
+never 0. The runner (argv, stdin, cwd, timeout, env) -> CompletedProcess is injectable for tests.
 """
 from __future__ import annotations
 
@@ -17,6 +19,9 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
+from . import launcher
+from .gitdiff import GitError
+
 ROOT = Path(__file__).resolve().parent.parent
 CONTRACT = ROOT / "contract"
 PROMPTS = ROOT / "prompts"
@@ -24,15 +29,15 @@ TIMEOUT = 1800
 LENSES = ("correctness", "security", "scope", "simplify", "conformance", "seam")
 ROLES = {"find": "finder-output", "verify": "verifier-output"}
 
-Runner = Callable[[list, str, str, float], subprocess.CompletedProcess]
+Runner = Callable[[list, str, str, float, dict], subprocess.CompletedProcess]
 
 
 class WorkerError(Exception):
     pass
 
 
-def default_runner(argv: list, stdin: str, cwd: str, timeout: float) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, input=stdin, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+def default_runner(argv: list, stdin: str, cwd: str, timeout: float, env: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, input=stdin, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
 
 
 # ------------------------------------------------------------------ schema subset validator
@@ -178,16 +183,25 @@ def parse_claude(stdout: str) -> tuple:
     return structured, used, None
 
 
+CLAUDE_SETTINGS = {"permissions": {"deny": ["Read(**/.env*)"]}}
+# read-only: :minimal (system and runtime paths) plus the workspace, nothing else under $HOME; no network
+CODEX_PROFILE = ['-c', 'default_permissions="review-loop"',
+                 '-c', 'permissions.review-loop.filesystem={":minimal"="read",":workspace_roots"={"."="read","**/.env*"="deny"}}']
+
+
 def run_claude(prompt: str, schema: dict, cwd: str, model: str, runner: Runner = default_runner) -> dict:
     # claude --json-schema rejects the draft-2020-12 $schema meta reference; the schema itself is unchanged
     bare = {k: v for k, v in schema.items() if k != "$schema"}
-    argv = ["claude", "-p", "--model", model, "--setting-sources", "", "--strict-mcp-config",
-            "--tools", "Read,Grep,Glob", "--output-format", "json", "--json-schema", json.dumps(bare)]
+    # --restricted: no user/project settings (so no hooks), file tools confined to cwd; --safe-mode: no CLAUDE.md,
+    # skills or plugins; the deny rule covers .env* the worktree strip missed (e.g. created after checkout)
+    argv = ["claude", "-p", "--model", model, "--restricted", "--safe-mode", "--strict-mcp-config",
+            "--tools", "Read,Grep,Glob", "--settings", json.dumps(CLAUDE_SETTINGS),
+            "--output-format", "json", "--json-schema", json.dumps(bare)]
 
     def once(text):
         # prompt on stdin: --tools is variadic and would swallow a trailing positional prompt
         try:
-            p = runner(argv, text, cwd, TIMEOUT)
+            p = runner(argv, text, cwd, TIMEOUT, launcher.worker_env())
         except subprocess.TimeoutExpired:
             return None, {}, "timeout"
         output, used, error = parse_claude(p.stdout)
@@ -213,18 +227,19 @@ def codex_usage(stdout: str) -> dict:
 
 
 def run_codex(prompt: str, schema: dict, cwd: str, model: str | None = None, runner: Runner = default_runner) -> dict:
-    with tempfile.TemporaryDirectory(prefix="review-loop-codex-") as td:
+    with tempfile.TemporaryDirectory(prefix="review-loop-codex-") as td, launcher.codex_home() as home:
         schema_file, out_file = Path(td) / "schema.json", Path(td) / "out.json"
         schema_file.write_text(json.dumps(schema))
-        argv = ["codex", "exec", "-s", "read-only", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
-                "--output-schema", str(schema_file), "-o", str(out_file), "--json"]
+        # the profile replaces -s read-only: it also denies $HOME outside the workspace (verified with codex sandbox)
+        argv = ["codex", "exec", *CODEX_PROFILE, "--ignore-user-config", "--ignore-rules", "--ephemeral",
+                "--skip-git-repo-check", "--output-schema", str(schema_file), "-o", str(out_file), "--json"]
         argv += ["-m", model] if model else []
         argv.append("-")  # prompt on stdin: a diff can exceed the argv size limit
 
         def once(text):
             out_file.unlink(missing_ok=True)
             try:
-                p = runner(argv, text, cwd, TIMEOUT)
+                p = runner(argv, text, cwd, TIMEOUT, launcher.worker_env({"CODEX_HOME": home}))
             except subprocess.TimeoutExpired:
                 return None, {}, "timeout"
             used = codex_usage(p.stdout)
@@ -252,16 +267,18 @@ def main(argv: list[str], runner: Runner = default_runner) -> int:
     ap.add_argument("--role", choices=tuple(ROLES), required=True)
     ap.add_argument("--model")
     ap.add_argument("--input", required=True, help="the rendered prompt")
-    ap.add_argument("--cwd", default=".")
+    ap.add_argument("--repo", default=".")
+    ap.add_argument("--rev", default="HEAD")
     args = ap.parse_args(argv)
     try:
         prompt = Path(args.input).read_text()
         schema = load_schema(ROLES[args.role])
-        if args.harness == "claude":
-            out = run_claude(prompt, schema, args.cwd, args.model or "sonnet", runner)
-        else:
-            out = run_codex(prompt, schema, args.cwd, args.model, runner)
-    except (WorkerError, OSError) as e:
+        with launcher.scratch_worktree(args.repo, args.rev) as wt:
+            if args.harness == "claude":
+                out = run_claude(prompt, schema, wt, args.model or "sonnet", runner)
+            else:
+                out = run_codex(prompt, schema, wt, args.model, runner)
+    except (WorkerError, GitError, OSError) as e:
         error = str(e)
     except Exception as e:  # noqa: BLE001 - an unexpected crash must be exit 3, never 0
         error = f"internal error: {type(e).__name__}"
