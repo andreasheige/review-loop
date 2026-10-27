@@ -6,3 +6,5 @@ redteam/results/
 golden/results/
 # graphify build output
 graphify-out/
+# python bytecode
+__pycache__/
