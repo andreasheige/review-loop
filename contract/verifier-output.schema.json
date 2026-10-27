@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review-loop/contract/verifier-output.schema.json",
+  "title": "review-loop verifier output (one finding)",
+  "description": "What a verifier worker returns for one model finding. Becomes the finding's verification (plus family, which the CLI adds from the worker). reasoning precedes verdict so the model reasons before concluding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "reasoning", "counter_evidence", "verdict"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^rev-[0-9a-f]{12}$"},
+    "reasoning": {"type": "string", "minLength": 1},
+    "counter_evidence": {"type": ["string", "null"]},
+    "verdict": {"enum": ["confirmed", "refuted", "unsure"]}
+  }
+}
