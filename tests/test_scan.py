@@ -182,8 +182,8 @@ class ScanTest(unittest.TestCase):
 
     # D2
     def test_bidi_and_zero_width_in_python_are_hard(self):
-        self.write("src/a.py", "ok = 1\naccess = 'user‮ ⁦// admin⁩⁦'\n")
-        self.write("src/b.py", "is​admin = False\n")
+        self.write("src/a.py", "ok = 1\naccess = 'user\u202e \u2066// admin\u2069\u2066'\n")
+        self.write("src/b.py", "is\u200badmin = False\n")
         rc, out = self.scan("--staged")
         self.assertEqual(rc, 1)
         got = sorted((f["sites"][0]["path"], f["sites"][0]["start_line"], f["status"], f["rule_class"], f["title"]) for f in out["findings"])
@@ -195,8 +195,8 @@ class ScanTest(unittest.TestCase):
         self.assertTrue(all(ord(c) < 0x2000 for c in json.dumps(out, ensure_ascii=False)))
 
     def test_emoji_zwj_allowed_in_readme_not_in_agents_md(self):
-        line = "Built by a \U0001F468‍\U0001F4BB with ❤️\n"
-        self.write("README.md", "﻿# fixture\n" + line)
+        line = "Built by a \U0001F468\u200d\U0001F4BB with ❤\ufe0f\n"
+        self.write("README.md", "\ufeff# fixture\n" + line)
         self.assertEqual(self.scan("--staged")[0], 0)
         self.write("AGENTS.md", line)
         rc, out = self.scan("--staged")
@@ -283,7 +283,7 @@ class ScanTest(unittest.TestCase):
         self.secrets.append(v)
         self.add_canary()
         self.write("src/config.ts", f'const api_key = "{v}";\n')
-        self.write("AGENTS.md", "x​y\n")
+        self.write("AGENTS.md", "x\u200by\n")
         self.write("package-lock.json", npm_lock([("evil-pkg", "1.0.0"), ("ghost-pkg", "1.0.0"), ("slow-pkg", "1.0.0")]))
         outputs = [self.scan("--staged")[1], self.scan_inproc(FakeNet())]
         self.git("remote", "add", "origin", "https://gitlab.example.invalid/client/app.git")
