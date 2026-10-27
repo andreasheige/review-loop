@@ -82,11 +82,26 @@ def main(argv: list[str]) -> int:
     mode.add_argument("--staged", action="store_true", help="scan the index diff")
     mode.add_argument("--range", metavar="A..B", help="scan the commits in A..B")
     ap.add_argument("--sarif", metavar="PATH", help="also write SARIF 2.1.0 here")
+    ap.add_argument("--format", choices=["json", "text"], default="json", help="text: one line per finding, for git hooks")
     args = ap.parse_args(argv)
     try:
         out = run(".", args.staged, args.range, args.sarif)
     except Exception as e:  # noqa: BLE001 - an unexpected crash must be exit 3 (block), never 0
         out = result([], [f"internal error: {type(e).__name__}"], {})
-    json.dump(out, sys.stdout, indent=2)
-    sys.stdout.write("\n")
+    if args.format == "text":
+        sys.stdout.write(text_report(out))
+    else:
+        json.dump(out, sys.stdout, indent=2)
+        sys.stdout.write("\n")
     return out["exit_code"]
+
+
+def text_report(out: dict) -> str:
+    """Human summary for hooks: no secret values (findings never hold them), no raw hidden characters."""
+    lines = [f"review-loop scan: {out['summary']}"]
+    for f in out["findings"]:
+        site = f["sites"][0]
+        lines.append(f"  {f['status']:<11} {f['rule_class'] or '-':<15} {site['path']}:{site['start_line']}  {f['title']}  [{f['id']}]")
+    if out.get("error"):
+        lines.append(f"  error: {out['error']}")
+    return "\n".join(lines) + "\n"
