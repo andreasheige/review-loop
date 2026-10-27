@@ -140,8 +140,9 @@ def retry_prompt(prompt: str, error: str) -> str:
             "Return only JSON that matches the schema.\n</previous_attempt>\n")
 
 
-def with_retry(prompt: str, schema: dict, once: Callable[[str], tuple]) -> dict:
-    """Call once(prompt) -> (output or None, usage, error); retry once with the error; raise WorkerError."""
+def with_retry(prompt: str, schema: dict, once: Callable[[str], tuple], check: Callable | None = None) -> dict:
+    """Call once(prompt) -> (output or None, usage, error); retry once with the error; raise WorkerError.
+    check(output) -> error or None adds a caller rule on top of the schema (e.g. coverage)."""
     usage, error = {}, ""
     for attempt in (1, 2):
         output, used, error = once(prompt if attempt == 1 else retry_prompt(prompt, error))
@@ -149,6 +150,8 @@ def with_retry(prompt: str, schema: dict, once: Callable[[str], tuple]) -> dict:
             usage[k] = usage.get(k, 0) + v
         if error is None:
             errs = validate(output, schema)
+            if not errs and check:
+                errs = [e for e in [check(output)] if e]
             if not errs:
                 return {"output": output, "usage": usage, "attempts": attempt}
             error = "schema: " + "; ".join(errs[:10])
@@ -189,7 +192,7 @@ CODEX_PROFILE = ['-c', 'default_permissions="review-loop"',
                  '-c', 'permissions.review-loop.filesystem={":minimal"="read",":workspace_roots"={"."="read","**/.env*"="deny"}}']
 
 
-def run_claude(prompt: str, schema: dict, cwd: str, model: str, runner: Runner = default_runner) -> dict:
+def run_claude(prompt: str, schema: dict, cwd: str, model: str, runner: Runner = default_runner, check=None) -> dict:
     # claude --json-schema rejects the draft-2020-12 $schema meta reference; the schema itself is unchanged
     bare = {k: v for k, v in schema.items() if k != "$schema"}
     # --restricted: no user/project settings (so no hooks), file tools confined to cwd; --safe-mode: no CLAUDE.md,
@@ -209,7 +212,7 @@ def run_claude(prompt: str, schema: dict, cwd: str, model: str, runner: Runner =
             error = f"exit {p.returncode}: {error}; stderr: {p.stderr[-300:]}"
         return output, used, error
 
-    return with_retry(prompt, schema, once)
+    return with_retry(prompt, schema, once, check)
 
 
 def codex_usage(stdout: str) -> dict:
@@ -226,7 +229,8 @@ def codex_usage(stdout: str) -> dict:
     return used
 
 
-def run_codex(prompt: str, schema: dict, cwd: str, model: str | None = None, runner: Runner = default_runner) -> dict:
+def run_codex(prompt: str, schema: dict, cwd: str, model: str | None = None, runner: Runner = default_runner,
+              check=None) -> dict:
     with tempfile.TemporaryDirectory(prefix="review-loop-codex-") as td, launcher.codex_home() as home:
         schema_file, out_file = Path(td) / "schema.json", Path(td) / "out.json"
         schema_file.write_text(json.dumps(schema))
@@ -248,7 +252,7 @@ def run_codex(prompt: str, schema: dict, cwd: str, model: str | None = None, run
             except (OSError, json.JSONDecodeError) as e:
                 return None, used, f"exit {p.returncode}: no valid output file ({type(e).__name__}); stderr: {p.stderr[-300:]}"
 
-        return with_retry(prompt, schema, once)
+        return with_retry(prompt, schema, once, check)
 
 
 # ------------------------------------------------------------------ CLI
