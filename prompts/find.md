@@ -85,7 +85,8 @@ For every finding:
   (a finding without a scenario never blocks, so give one whenever the failure is real)
 - `evidence`: `{"kind": "trace", "ref": null}` when you traced it through the code, `{"kind": "none", "ref": null}` when it is an assertion only
 - `surface` and `cwe` for security findings, null otherwise; `body` for the fix you recommend, or null
-Set `reviewed_paths` to the changed paths you actually read and reviewed, repo-relative.
+Read every changed path listed in the task and put each one in `reviewed_paths` (repo-relative, exactly as listed;
+leave out paths marked deleted). A run that leaves a listed path out is rejected.
 If you cannot support any substantive finding, return an empty `findings` list.
 </structured_output_contract>
 
