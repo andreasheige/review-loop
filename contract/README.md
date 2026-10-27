@@ -9,7 +9,7 @@ The shared contract between the review loop and the security loop: one CLI, one 
 | `accept.schema.json` | one line of `accepts.jsonl` |
 | `examples/` | hand-written examples; `validate.py` checks them |
 
-Check: `uv run --offline --script review-loop/contract/validate.py` (from the repo root) (exit 0 = all examples behave as expected).
+Check: `uv run --offline --script contract/validate.py` (exit 0 = all examples behave as expected).
 
 ## Status
 

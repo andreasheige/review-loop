@@ -20,7 +20,7 @@ Real cases point at local repos by absolute path, so they only run on the machin
 
 `cases.jsonl` is local only (gitignored): it names private repos, paths and bug summaries. `verify_cases.py` and `synthetic/build.sh` are public.
 
-**Only personal repos go in**: origin owned by `andreasheige`, or no remote. Never a client or employer repo (`~/Knowit/**`), never a repo owned by someone else. This repo is public. No secret values either: a fixture that needs one generates a `REVIEWLOOP_CANARY_` value at build time.
+**Only personal repos go in**: origin owned by `andreasheige`, or no remote. Never a client or employer repo (`~/Knowit/**`), never a repo owned by someone else. This repo may be published. No secret values either: a fixture that needs one generates a `REVIEWLOOP_CANARY_` value at build time.
 
 ## Synthetic cases
 
