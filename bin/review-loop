@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """review-loop CLI. usage: review-loop scan (--staged | --range A..B) [--sarif PATH]
+       review-loop eot [--base REF] [--rev REV] [--ticket PATH | --intent TEXT] [--finder H[:M]]... [--verifier H[:M]]...
        review-loop worker --harness claude|codex --role find|verify --model M --input FILE [--repo DIR] [--rev REV]"""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-COMMANDS = ("scan", "worker")
+COMMANDS = ("scan", "eot", "worker")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
@@ -16,6 +17,10 @@ if __name__ == "__main__":
         from review_loop import workers
 
         sys.exit(workers.main(sys.argv[2:]))
+    if sys.argv[1] == "eot":
+        from review_loop import eot
+
+        sys.exit(eot.main(sys.argv[2:]))
     from review_loop import scan
 
     sys.exit(scan.main(sys.argv[2:]))

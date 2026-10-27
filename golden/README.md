@@ -37,3 +37,11 @@ Builds one two-commit repo per case. Fixed names, emails, dates and an empty glo
 ```
 
 Stdlib only. `bug`: every `expect` range must contain a line the fix commit in `source` changed (by blame at `fix^`). `clean`: no later fix commit's blame reaches `head`. Synthetic: rebuild into a temp dir, SHAs must match, every range must lie inside the head diff. One line per case; exit 0 only if all pass.
+
+## Score `review-loop eot`
+
+```sh
+./eot_eval.py [--cases id,id] [--finder claude:opus] [--verifier claude:opus] [--jobs 3]
+```
+
+Runs `eot` on each case (results cached in `results/<case>/eot.json`) and writes `results/eot-summary.json` next to the `baseline.json` numbers: recall before and after verification, blocking and kept findings per clean case, injection outcomes, canary in any stored prompt, wall time, tokens.
