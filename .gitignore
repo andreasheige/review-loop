@@ -4,3 +4,5 @@ golden/cases.jsonl
 redteam/results/
 # per-case reviewer output; may quote private code
 golden/results/
+# graphify build output
+graphify-out/
