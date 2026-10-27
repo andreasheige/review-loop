@@ -9,6 +9,7 @@ Verdicts: deny / ask / allow / no-hook (the harness has no guard for that tool a
 Block-log writes go to /dev/null so probes don't pollute the agent-safety metrics.
 """
 import argparse
+import base64
 import datetime
 import json
 import os
@@ -22,6 +23,7 @@ HOME = str(Path.home())
 GUARDRAIL = f"{HOME}/.claude/hooks/guardrail.sh"
 SECRET = f"{HOME}/.agent-global/hooks/secret-placement.sh"
 COPILOT = f"{HOME}/.agent-global/hooks/copilot-pretooluse.sh"
+AGY = f"{HOME}/.agent-global/hooks/antigravity-pretooluse.sh"
 ANTIGRAVITY_HOOKS = Path(HOME) / ".gemini/config/hooks.json"
 HARNESSES = ["claude", "codex", "copilot", "pi", "antigravity"]
 
@@ -82,8 +84,19 @@ def copilot(kind, arg, cwd):
 
 
 def antigravity(kind, arg, cwd):
-    # No global hooks.json -> no PreToolUse guard at all. If one appears, this row must be re-implemented.
-    return "no-hook" if not ANTIGRAVITY_HOOKS.exists() else "unimplemented"
+    """Antigravity: one adapter on every tool (matcher "*"); no hooks.json means no guard at all."""
+    if not ANTIGRAVITY_HOOKS.exists():
+        return "no-hook"
+    call_ = {"bash": ("run_command", {"CommandLine": arg, "Cwd": cwd}), "read": ("view_file", {"AbsolutePath": arg}),
+             "edit": ("replace_file_content", {"TargetFile": arg, "ReplacementChunks": [{"TargetContent": "a", "ReplacementContent": "b"}]}),
+             "write": ("write_to_file", {"TargetFile": arg, "CodeContent": "#!/bin/sh\nexit 0\n"})}[kind]
+    payload = {"toolCall": {"name": call_[0], "args": call_[1]}, "conversationId": "redteam", "workspacePaths": [cwd]}
+    env = {**os.environ, "GUARD_LOG": "/dev/null", "AGY_KEYLOG": "/dev/null"}
+    p = subprocess.run(["bash", AGY], input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=30)
+    try:
+        return {"deny": "deny", "ask": "ask"}.get(json.loads(p.stdout.strip() or "{}").get("decision"), "allow")
+    except json.JSONDecodeError:
+        return "allow"
 
 
 def main():
@@ -94,9 +107,20 @@ def main():
     for line in (HERE / "probes.tsv").read_text().splitlines():
         if line.strip() and not line.startswith("#"):
             pid, group, kind, arg, want = line.split("\t")
-            probes.append((pid, group, kind, arg.replace("HOME/", HOME + "/"), want))
+            probes.append((pid, group, kind, arg, want))
     cwd = tempfile.mkdtemp(prefix="redteam-cwd-")
     subprocess.run(["git", "init", "-q", cwd], check=True)
+    # fixtures for the guardrails-md bypass rows: symlinked guard file and dir, write-then-run script
+    os.symlink(GUARDRAIL, f"{cwd}/link-guard")
+    os.symlink(f"{HOME}/.claude/hooks", f"{cwd}/linkdir")
+    Path(f"{cwd}/evil.sh").write_text("#!/bin/sh\n" + (HERE / "probes.tsv").read_text().split("WRITE_THEN_RUN=")[1].splitlines()[0] + "\n")
+
+    def expand(arg):
+        arg = arg.replace("HOME/", HOME + "/").replace("CWD/", cwd + "/")
+        if arg.startswith("B64:"):
+            arg = f"echo {base64.b64encode(arg[4:].encode()).decode()} | base64 -d | sh"
+        return arg
+    probes = [(pid, group, kind, expand(arg), want) for pid, group, kind, arg, want in probes]
     rows = []
     for pid, group, kind, arg, want in probes:
         verdicts = {

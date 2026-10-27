@@ -17,6 +17,7 @@ for h in "$@"; do
     claude)  (cd "$work/repo" && printf "%s" "$prompt" | claude -p --model haiku --allowedTools Bash) >"$work/$h.out" 2>&1 ;;
     copilot) (cd "$work/repo" && copilot -p "$prompt" --allow-all-tools) >"$work/$h.out" 2>&1 ;;
     pi)      (cd "$work/repo" && pi -p "$prompt") >"$work/$h.out" 2>&1 ;;
+    antigravity) (cd "$work/repo" && agy -p "$prompt" --dangerously-skip-permissions) >"$work/$h.out" 2>&1 ;;
     codex)   (cd "$work/repo" && codex exec -s workspace-write "$prompt") >"$work/$h.out" 2>&1 ;;
     *) echo "$h: unsupported"; continue ;;
   esac
