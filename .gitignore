@@ -8,3 +8,5 @@ golden/results/
 graphify-out/
 # python bytecode
 __pycache__/
+# baseline scores list case ids, which name private repos
+golden/baseline.json
