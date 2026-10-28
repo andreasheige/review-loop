@@ -126,7 +126,28 @@ class RecheckTest(RepoCase):
         self.edit("b - a")
         code, out = self.recheck(FakeClaude(CLEAN, "unsure"))
         self.assertEqual(code, 1)
-        self.assertEqual(next(f for f in out["findings"] if f["title"] == BUG["title"])["status"], "blocking")
+        bug = next(f for f in out["findings"] if f["title"] == BUG["title"])
+        self.assertEqual((bug["status"], bug["verification"]["verdict"]), ("blocking", "confirmed"))
+        self.assert_valid_record(out["record_path"])
+
+    def test_fix_that_restores_the_base_passes_after_a_scan(self):
+        self.blocked_eot()
+        self.edit("a + b")
+        fake = FakeClaude(CLEAN)
+        code, out = self.recheck(fake)
+        self.assertEqual((code, fake.prompts), (0, []))
+        self.assertIn("no longer changes anything", out["note"])
+
+    def test_secret_added_and_removed_since_the_last_round_blocks(self):
+        self.change()
+        self.assertEqual(self.eot(FakeClaude(CLEAN))[0], 0)
+        self.write("src/x.ts", f'const k = "{canary()}";\n')
+        self.commit("feat: x")
+        self.git("rm", "-q", "src/x.ts")
+        self.commit("chore: drop x")
+        code, out = self.recheck(FakeClaude(CLEAN))
+        self.assertEqual(code, 1)
+        self.assertNotIn("note", out)
 
     def test_verifier_sees_the_whole_ticket_diff(self):
         self.blocked_eot()

@@ -11,7 +11,8 @@ Each round: scan the whole ticket range again (a D1 hit stops before any model s
 ticket paths changed since the last completed round's head (the merge-base if none); every open finding is verified
 again against the whole ticket diff and stays open unless every verifier refutes it (proven ones stay for their
 repro). A round that stops or errors keeps the open findings in its record. Same patch-id as the latest completed
-round: its outcome is reported again without a model. Cap: round 3 (two rechecks); open findings then exit 2. Past
+round and no new scan hit in the history: its outcome is reported again without a model. A branch that no longer
+changes anything against the base gets the scan only. Cap: round 3 (two rechecks); open findings then exit 2. Past
 the cap only the scan runs: a hard hit exits 1, anything else exits 2 (a human looks at the change).
 """
 from __future__ import annotations
@@ -46,7 +47,6 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     repo = git(repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
     head = verify_commit(repo, rev)
     base = git(repo, "merge-base", verify_commit(repo, base_ref), head).stdout.decode().strip()
-    pid = eot.patch_id(repo, base, head)
     common = Path(repo, git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
     br = eot.branch(repo)
     if not br:
@@ -54,12 +54,22 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     links = eot.chain(repo, common, base, br, head)
     if not links:
         raise eot.EotError(f"no earlier eot record for branch {br}; run `review-loop eot` first")
+    try:
+        pid = eot.patch_id(repo, base, head)
+    except eot.EotError:  # the fixes undid the whole ticket: nothing left to review, but the history is still scanned
+        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None)
+        o = eot.outcome(sc["findings"], f"scan: {sc['error']}" if sc.get("error") else None)
+        return {**links[-1][0], "findings": sc["findings"], "outcome": o,
+                "note": "the branch no longer changes anything against the base; only the scan ran"}, None
     done = [(r, d) for r, d in links if eot.completed(r)]
     eots = [i for i, (r, _) in enumerate(done) if r["command"] == "eot"]
     done = done[eots[-1]:] if eots else done  # a re-run eot (only allowed before any recheck) starts afresh
     if done and done[-1][0]["key"]["patch_id"] == pid:
+        # same end state, but commits in between may add a secret and remove it again: D1 scans the history
         r, d = done[-1]
-        return {**r, "note": f"no change since round {r['round']}; its outcome stands"}, d
+        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None)
+        if not sc.get("error") and {f["id"] for f in sc["findings"]} <= {f["id"] for f in r["findings"]}:
+            return {**r, "note": f"no change since round {r['round']}; its outcome stands"}, d
     latest = state([r for r, _ in done])
     open_ = [f for f in latest.values() if f["status"] in OPEN]
     known = [known_entry(f) for f in latest.values() if f["status"] == "advisory"]
