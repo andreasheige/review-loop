@@ -1,6 +1,10 @@
 """review-loop scan: D1 secrets (gitleaks), D2 hidden Unicode, D3 dependency lockfiles on one diff.
 
-usage: review-loop scan (--staged | --range A..B) [--sarif PATH]
+usage: review-loop scan (--staged | --range A..B) [--policy] [--sarif PATH] [--format json|text]
+
+--policy adds the NEEDS_HUMAN control-weakening classes (review_loop/policy.py), exempts young dependencies in
+lockfile-only bot commits, and applies `review-loop accept` entries. Without it (the pre-commit hook) neither runs,
+so nothing on disk can weaken the D1–D3 scan.
 
 Stdout: one JSON object {findings, exit_code, summary[, error], tools}. Exit 0 pass, 1 block, 2 needs_human,
 3 tool error. D1/D2 failures (scanner missing, hash mismatch, crash) are 3 = block, never 0; D3 lookup
@@ -10,15 +14,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
-from . import deps, gitdiff, normalise, unicode_check
+from . import accept, deps, gitdiff, normalise, policy as policy_classes, unicode_check
 from .secret_scan import Gitleaks
 from .tools import ToolError
 
 
-def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = None, net=None) -> dict:
+def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = None, net=None, policy=False) -> dict:
     findings, errors, tools = [], [], {}
     try:
         repo = gitdiff.git(repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
@@ -47,7 +52,14 @@ def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = Non
         ]
         lockfiles = [(p, old, new) for p, old, new in lockfiles if new is not None]
         if lockfiles:
-            findings += deps.scan(lockfiles, gitdiff.origin(repo), net)
+            dep = deps.scan(lockfiles, gitdiff.origin(repo), net)
+            if policy and not staged and bot_lockfile_only(repo, base, head):
+                for f in dep:
+                    if f["rule_class"] == "dep-young":
+                        f["status"] = "advisory"
+            findings += dep
+        if policy:
+            findings += policy_classes.scan(repo, staged, base, head, added)
     except gitdiff.GitError as e:
         errors.append(f"D2: {e}")
     finally:
@@ -56,7 +68,22 @@ def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = Non
                 findings += leaks.collect()
             except ToolError as e:
                 errors.append(f"D1: {e}")
-    return result(normalise.merge(findings), errors, tools, sarif)
+    findings = normalise.merge(findings)
+    if not policy:
+        return result(findings, errors, tools, sarif)
+    return {**result(accept.apply(repo, findings), errors, tools, sarif), "policy": True}
+
+
+BOT = re.compile(r"\[bot\]@|dependabot|renovate", re.I)
+MANIFESTS = {"package.json", "pyproject.toml", "requirements.txt", "go.mod", "Cargo.toml", "Gemfile"}
+
+
+def bot_lockfile_only(repo: str, base: str, head: str) -> bool:
+    """Every commit in the range is a bot's and touches only lockfiles/manifests (Dependabot, Renovate)."""
+    authors = gitdiff.git(repo, "log", "--format=%ae", f"{base}..{head}").stdout.decode().split()
+    paths = policy_classes.changed_paths(repo, False, base, head)
+    return bool(authors) and all(BOT.search(a) for a in authors) and bool(paths) and all(
+        Path(p).name in set(deps.LOCKFILES) | MANIFESTS for p in paths)
 
 
 def result(findings: list[dict], errors: list[str], tools: dict, sarif: str | None = None) -> dict:
@@ -82,10 +109,11 @@ def main(argv: list[str]) -> int:
     mode.add_argument("--staged", action="store_true", help="scan the index diff")
     mode.add_argument("--range", metavar="A..B", help="scan the commits in A..B")
     ap.add_argument("--sarif", metavar="PATH", help="also write SARIF 2.1.0 here")
+    ap.add_argument("--policy", action="store_true", help="also the control-weakening classes, and apply accepts")
     ap.add_argument("--format", choices=["json", "text"], default="json", help="text: one line per finding, for git hooks")
     args = ap.parse_args(argv)
     try:
-        out = run(".", args.staged, args.range, args.sarif)
+        out = run(".", args.staged, args.range, args.sarif, policy=args.policy)
     except Exception as e:  # noqa: BLE001 - an unexpected crash must be exit 3 (block), never 0
         out = result([], [f"internal error: {type(e).__name__}"], {})
     if args.format == "text":
@@ -102,6 +130,10 @@ def text_report(out: dict) -> str:
     for f in out["findings"]:
         site = f["sites"][0]
         lines.append(f"  {f['status']:<11} {f['rule_class'] or '-':<15} {site['path']}:{site['start_line']}  {f['title']}  [{f['id']}]")
+    held = [f for f in out["findings"] if f["status"] == "needs_human"] if out.get("policy") else []
+    if held:
+        lines.append("  a human decides each needs_human finding; to accept one, run in a terminal:")
+        lines += [f"    {accept.command(f)}" for f in held]
     if out.get("error"):
         lines.append(f"  error: {out['error']}")
     return "\n".join(lines) + "\n"

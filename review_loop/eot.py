@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from . import deps, launcher, normalise, scan, secret_scan, workers
+from . import accept, deps, launcher, normalise, scan, secret_scan, workers
 from .gitdiff import GitError, git, verify_commit
 
 FAMILY = {"claude": "claude", "codex": "gpt", "copilot": "gpt"}  # copilot runs a GPT model
@@ -204,7 +204,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     }
     error = None
     try:
-        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=str(round_dir / "scan.sarif"))
+        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=str(round_dir / "scan.sarif"), policy=True)
         record["tools"] = sc["tools"]
         record["findings"] = list(sc["findings"])
         if sc.get("error"):
@@ -222,6 +222,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
         error = str(e)
     except Exception as e:  # noqa: BLE001 - an unexpected crash is exit 3 with a record, never 0
         error = f"internal error: {type(e).__name__}"
+    record["findings"] = accept.apply(repo, record["findings"])  # a review accept only matches a rev- finding
     record["outcome"] = outcome(record["findings"], error)
     write(round_dir / "record.json", record)
     return record, round_dir

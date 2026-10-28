@@ -311,7 +311,8 @@ class RecheckTest(RepoCase):
         self.write("tests/test_calc.py", "from src.calc import add\n\n\ndef test_add():\n    assert add(2, 1) == 1\n")
         self.commit("feat: change test")
         code, out = self.eot(FakeClaude({"findings": [], "reviewed_paths": ["tests/test_calc.py"]}))
-        self.assertEqual((code, self.fix_checks(out)), (0, {}))
+        self.assertEqual((code, list(self.fix_checks(out))), (2, ["review-loop:deleted-assertion"]),
+                         "no fix check in eot; the changed assertion is a scan policy hit")
 
     def test_secret_in_the_intent_stops_recheck_before_any_model(self):
         self.blocked_eot()

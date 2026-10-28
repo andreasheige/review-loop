@@ -24,7 +24,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import eot, normalise, scan, secret_scan, workers
+from . import accept, eot, normalise, scan, secret_scan, workers
 from .gitdiff import GitError, git, verify_commit
 
 MAX_ROUND = 3
@@ -92,7 +92,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     try:
         pid = eot.patch_id(repo, base, head)
     except eot.EotError:  # the fixes undid the whole ticket: nothing left to review, but the history is still scanned
-        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None)
+        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None, policy=True)
         o = eot.outcome(sc["findings"], f"scan: {sc['error']}" if sc.get("error") else None)
         return {**links[-1][0], "findings": sc["findings"], "outcome": o,
                 "note": "the branch no longer changes anything against the base; only the scan ran"}, None
@@ -102,7 +102,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     if done and done[-1][0]["key"]["patch_id"] == pid:
         # same end state, but commits in between may add a secret and remove it again: D1 scans the history
         r, d = done[-1]
-        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None)
+        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None, policy=True)
         if not sc.get("error") and {f["id"] for f in sc["findings"]} <= {f["id"] for f in r["findings"]}:
             return {**r, "note": f"no change since round {r['round']}; its outcome stands"}, d
     latest = state([r for r, _ in done])
@@ -112,7 +112,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     prev = links[-1][0]
 
     if n > MAX_ROUND:  # past the cap: scan only, never another model round
-        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None)
+        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None, policy=True)
         o = eot.outcome(sc["findings"], f"scan: {sc['error']}" if sc.get("error") else None)
         if o["exit_code"] == 0:
             o = {"exit_code": 2, "summary": "needs_human"}
@@ -141,7 +141,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     }
     error, reviewed = None, False
     try:
-        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=str(round_dir / "scan.sarif"))
+        sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=str(round_dir / "scan.sarif"), policy=True)
         record["tools"] = sc["tools"]
         record["findings"] = list(sc["findings"])
         if sc.get("error"):
@@ -174,6 +174,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
         error = f"internal error: {type(e).__name__}"
     if not reviewed:  # stopped, failed or nothing to check against: the open findings stay open
         record["findings"] += open_
+    record["findings"] = accept.apply(repo, record["findings"])  # a review accept only matches a rev- finding
     record["outcome"] = eot.outcome(record["findings"], error, last_round=n == MAX_ROUND)
     eot.write(round_dir / "record.json", record)
     return record, round_dir
