@@ -155,10 +155,13 @@ def status(f: dict, verdicts: list[dict]) -> str:
     return "discarded"
 
 
-def outcome(findings: list[dict], error: str | None) -> dict:
+def outcome(findings: list[dict], error: str | None, last_round: bool = False) -> dict:
+    """last_round: the recheck cap is reached, so open blocking findings go to a human (exit 2) instead of another fix."""
     statuses = {f["status"] for f in findings}
     if error:
         return {"exit_code": 3, "summary": "error", "error": error}
+    if last_round and statuses & {"proven", "blocking"} and "hard" not in statuses:
+        return {"exit_code": 2, "summary": "needs_human"}
     if statuses & {"hard", "proven", "blocking"}:
         return {"exit_code": 1, "summary": "blocked"}
     if "needs_human" in statuses:
@@ -181,6 +184,8 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     finders = finders or [worker_spec(h) for h in NON_AUTHOR[family]]
     verifiers = verifiers or finders
     common = Path(repo, git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
+    if any(r["command"] == "recheck" for r, _ in chain(repo, common, base, branch(repo), head)):
+        raise EotError("this branch already has recheck rounds; run `review-loop recheck` (the round cap is per branch)")
     round_dir = common / "review-loop" / pid / "round-1"
     shutil.rmtree(round_dir, ignore_errors=True)  # a re-run replaces round-1 whole, stale prompts included
     (round_dir / "prompts").mkdir(parents=True)
@@ -193,8 +198,8 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     record = {
         "schema_version": 1, "command": "eot",
         "key": {"patch_id": pid, "base_ref": base_ref, "merge_base": None},
-        "round": 1, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "author_family": family, "intent_source": source, "workers": [], "tools": {},
+        "round": 1, "created_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+        "head": head, "branch": branch(repo), "author_family": family, "intent_source": source, "workers": [], "tools": {},
         "reviewed_paths": [], "findings": [],
     }
     error = None
@@ -224,10 +229,73 @@ class StopReview(Exception):
     pass
 
 
-def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verifiers, round_dir, record, runner) -> list[dict]:
+def branch(repo: str) -> str | None:
+    p = git(repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+    return p.stdout.decode().strip() or None
+
+
+def records(common: Path):
+    for p in (common / "review-loop").glob("*/round-*/record.json"):
+        try:
+            r = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if r.get("command") in ("eot", "recheck") and r.get("head"):
+            yield r, p.parent
+
+
+def is_ancestor(repo: str, a: str, b: str) -> bool:
+    return git(repo, "merge-base", "--is-ancestor", a, b, check=False).returncode == 0
+
+
+def branch_created(repo: str, br: str) -> str | None:
+    """When this branch ref was created (its oldest reflog entry), UTC ISO; None without a reflog."""
+    p = git(repo, "reflog", "show", "--date=iso-strict", "--format=%gd", f"refs/heads/{br}", "--", check=False)
+    lines = p.stdout.decode().split()
+    if p.returncode or not lines:
+        return None
+    m = re.search(r"\{(.+)\}", lines[-1])
+    return datetime.fromisoformat(m.group(1)).astimezone(timezone.utc).isoformat(timespec="microseconds") if m else None
+
+
+def chain(repo: str, common: Path, base: str, br: str | None, head: str) -> list[tuple[dict, Path]]:
+    """Every eot/recheck record of this branch's ticket, oldest round first. Records whose head is already in base
+    belong to a merged ticket. The rest belong here when they were made on this branch since it was created (a
+    reused name after a squash merge starts afresh; a rebase keeps the reflog), or when their head is in this
+    history and their branch no longer exists (renamed). A stacked branch's parent still exists, so its records
+    stay its own."""
+    if not br:
+        return []
+    born = branch_created(repo, br)
+    out = []
+    for r, d in records(common):
+        if is_ancestor(repo, r["head"], base):
+            continue
+        rb = r.get("branch")
+        if rb == br and (born is None or r["created_at"] >= born or is_ancestor(repo, r["head"], head)):
+            out.append((r, d))
+        elif rb != br and is_ancestor(repo, r["head"], head) and (
+                not rb or git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{rb}", check=False).returncode):
+            out.append((r, d))
+    return sorted(out, key=lambda x: (x[0]["round"], x[0]["created_at"]))
+
+
+def completed(r: dict) -> bool:
+    """The round reviewed the change: no error and no D1 stop before the models."""
+    return r["outcome"]["exit_code"] != 3 and not any(
+        f["rule_class"] == "secret" and f["introduced_by"] == "diff" for f in r["findings"])
+
+
+def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verifiers, round_dir, record, runner,
+           prior=(), known=(), verify_diff=None) -> list[dict]:
+    """prior: open findings from earlier rounds, verified again (recheck); one stays open unless every verifier
+    refutes it, and a proven one is left to its repro. known: earlier advisory findings, never reported again.
+    verify_diff: what verifiers see (default: the finder's diff). The finder only runs when there are paths to read."""
     diff = git(repo, "--literal-pathspecs", "diff", "-M", "--no-color", "--no-ext-diff", base, head, "--",
                *diff_paths).stdout.decode("utf-8", "replace")
-    prompt = workers.find_prompt(text, diff, eligible + [f"{p} (deleted)" for p in deleted])
+    verify_diff = diff if verify_diff is None else verify_diff
+    prompt = workers.find_prompt(text, diff, eligible + [f"{p} (deleted)" for p in deleted], known=known)
+    suppress = {k["id"] for k in known}
     write_prompt(round_dir / "prompts/find.md", prompt)
     find_schema, verify_schema = workers.load_schema("finder-output"), workers.load_schema("verifier-output")
     with launcher.scratch_worktree(repo, head) as wt, ThreadPoolExecutor(PARALLEL) as pool:
@@ -235,20 +303,26 @@ def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verif
             missing = sorted(set(eligible) - set(output["reviewed_paths"]))
             return f"reviewed_paths leaves out changed paths: {', '.join(missing)}" if missing else None
 
-        runs = list(pool.map(lambda s: run_worker(s, "finder", prompt, find_schema, wt, runner, coverage), finders))
+        runs = list(pool.map(lambda s: run_worker(s, "finder", prompt, find_schema, wt, runner, coverage),
+                             finders if eligible or deleted else []))
         found: dict[str, dict] = {}
         for output, entry in runs:
             record["workers"].append(entry)
             for raw in output["findings"]:
                 f = model_finding(raw)
-                found.setdefault(f["id"], f)
+                if f["id"] not in suppress or needs_verify(f):  # an advisory that now has a failure scenario
+                    found.setdefault(f["id"], f)
+        prior_status = {f["id"]: f["status"] for f in prior}
+        for f in prior:
+            found[f["id"]] = {k: v for k, v in f.items() if k not in ("status", "verification")}
         record["reviewed_paths"] = list(eligible)
 
-        jobs = [(f, v) for f in found.values() if needs_verify(f) for v in verifiers]
+        jobs = [(f, v) for f in found.values() if needs_verify(f) and prior_status.get(f["id"]) != "proven"
+                for v in verifiers]
 
         def verify(job):
             f, spec = job
-            p = workers.verify_prompt(f["id"], {k: v for k, v in f.items() if k != "id"}, diff)
+            p = workers.verify_prompt(f["id"], {k: v for k, v in f.items() if k != "id"}, verify_diff)
             write_prompt(round_dir / f"prompts/verify-{f['id']}-{spec[0]}.md", p)
             out, entry = run_worker(spec, "verifier", p, verify_schema, wt, runner)
             if out["id"] != f["id"]:
@@ -262,7 +336,11 @@ def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verif
 
     for f in found.values():
         vs = verdicts.get(f["id"], [])
-        f["status"] = status(f, vs)
+        was = prior_status.get(f["id"])
+        if was:  # fixed only when every verifier refutes it; unsure or a missing verdict keeps it open
+            f["status"] = "discarded" if vs and all(v["verdict"] == "refuted" for v in vs) else was
+        else:
+            f["status"] = status(f, vs)
         if vs:  # the deciding verdict: the first that did not confirm, else the first
             v = next((v for v in vs if v["verdict"] != "confirmed"), vs[0])
             f["verification"] = {"verdict": v["verdict"], "reasoning": v["reasoning"],
@@ -296,7 +374,11 @@ def default_base(repo: str) -> str:
 
 def text_report(record: dict, round_dir) -> str:
     o = record["outcome"]
-    lines = [f"review-loop eot: {o['summary']}  ({len(record['reviewed_paths'])} paths reviewed, author {record['author_family']})"]
+    rnd = f" round {record['round']}" if record.get("round", 1) > 1 else ""
+    lines = [f"review-loop {record.get('command', 'eot')}{rnd}: {o['summary']}  "
+             f"({len(record['reviewed_paths'])} paths reviewed, author {record['author_family']})"]
+    if record.get("note"):
+        lines.append(f"  {record['note']}")
     for f in record["findings"]:
         if f["status"] == "discarded":
             continue
@@ -312,8 +394,10 @@ def text_report(record: dict, round_dir) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main(argv: list[str], runner=workers.default_runner) -> int:
-    ap = scan.Parser(prog="review-loop eot", description=__doc__.splitlines()[0])
+def main(argv: list[str], runner=workers.default_runner, command="eot", run_fn=None) -> int:
+    """Also recheck's CLI: same flags, its own run()."""
+    ap = scan.Parser(prog=f"review-loop {command}", description=(sys.modules[run_fn.__module__].__doc__ if run_fn
+                                                                  else __doc__).splitlines()[0])
     ap.add_argument("--base", help="base ref (default origin/HEAD, else origin/main, else main)")
     ap.add_argument("--rev", default="HEAD")
     src = ap.add_mutually_exclusive_group()
@@ -326,7 +410,7 @@ def main(argv: list[str], runner=workers.default_runner) -> int:
     args = ap.parse_args(argv)
     round_dir = None
     try:
-        record, round_dir = run(".", args.base or default_base("."), args.rev, ticket=args.ticket,
+        record, round_dir = (run_fn or run)(".", args.base or default_base("."), args.rev, ticket=args.ticket,
                                 intent_text=args.intent, family=args.author_family, finders=args.finder,
                                 verifiers=args.verifier, runner=runner)
     except (EotError, GitError, OSError) as e:

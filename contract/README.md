@@ -66,6 +66,8 @@ $(git rev-parse --git-common-dir)/review-loop/      never committed
   skips.log                                          REVIEW_LOOP_SKIP uses
 ```
 
+Rounds: `eot` is round 1, `recheck` rounds 2–3. The rounds of one ticket are chained by branch (a renamed branch keeps its chain; a name reused after a merge starts afresh). Known limits: the records are local files the agent under review can edit or delete, so the cap and the open findings hold against mistakes, not against a hostile agent (signing records with the local HMAC key is a possible later step); a copied branch (`git switch -c` from a ticket branch) starts a new chain; two branches with the same patch-id share `<patch-id>/round-<n>/`.
+
 Keys: EOT records use the `-U0` patch-id against `origin/<base>` (`merge_base: null`). EOE records use `(patch_id, merge_base)`, so any move of main forces a re-run.
 
 ## Config split
