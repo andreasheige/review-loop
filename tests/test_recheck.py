@@ -313,6 +313,14 @@ class RecheckTest(RepoCase):
         code, out = self.eot(FakeClaude({"findings": [], "reviewed_paths": ["tests/test_calc.py"]}))
         self.assertEqual((code, self.fix_checks(out)), (0, {}))
 
+    def test_secret_in_the_intent_stops_recheck_before_any_model(self):
+        self.blocked_eot()
+        self.edit("b + a")
+        fake = FakeClaude(CLEAN, "refuted")
+        code, out = self.recheck(fake, "--intent", f"key {canary()}")
+        self.assertEqual((code, fake.prompts), (1, []))
+        self.assertIn(BUG["title"], [f["title"] for f in out["findings"]], "the open finding is kept")
+
     def test_unchanged_patch_id_reports_the_last_outcome(self):
         self.blocked_eot()
         fake = FakeClaude(CLEAN)

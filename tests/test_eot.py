@@ -8,7 +8,9 @@ with GIT_CONFIG_GLOBAL=/dev/null. Canary values are generated at runtime and nev
 import io
 import json
 import os
+import secrets
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
@@ -188,10 +190,31 @@ class EotTest(RepoCase):
         self.change()
         fake = FakeClaude({"findings": [], "reviewed_paths": ["src/calc.py"]})
         code, out = self.eot(fake, "--intent", f"use key {canary()}")
-        self.assertEqual(code, 3)
+        self.assertEqual(code, 1)
         self.assertEqual(fake.prompts, [])
-        self.assertIn("canary", out["outcome"]["error"])
+        self.assertEqual([(f["sites"][0]["path"], f["status"]) for f in out["findings"]], [("<intent>", "hard")])
         self.assertEqual(list(Path(out["record_path"]).parent.joinpath("prompts").iterdir()), [])
+
+    def test_secret_in_ticket_intent_or_commit_body_stops_before_the_finder(self):
+        provider = "gh" + "p_" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(36))
+        generic = f'api_key = "{entropy_value()}"'
+        ticket = self.tmp / "ticket.md"
+        for value, code in ((provider, 1), (generic, 2)):
+            for where in ("ticket", "intent", "commits"):
+                with self.subTest(where=where, kind="provider" if code == 1 else "generic"):
+                    self.git("reset", "-q", "--hard", self.base)
+                    body = f"feat: add\n\ncontext: {value}" if where == "commits" else "feat: add"
+                    self.write("src/calc.py", f"def add(a, b):\n    return a - b  # {where}{code}\n")
+                    self.commit(body)
+                    args = {"ticket": ["--ticket", str(ticket)], "intent": ["--intent", f"note {value}"],
+                            "commits": []}[where]
+                    ticket.write_text(f"# T\n\n{value}\n")
+                    fake = FakeClaude({"findings": [], "reviewed_paths": ["src/calc.py"]})
+                    got, out = self.eot(fake, *args)
+                    self.assertEqual((got, fake.prompts), (code, []))
+                    self.assertIn(f"<{where}>", [f["sites"][0]["path"] for f in out["findings"]])
+                    self.assertEqual(list(Path(out["record_path"]).parent.joinpath("prompts").iterdir()), [])
+                    self.assertNotIn(value.split('"')[-2] if code == 2 else value, json.dumps(out))
 
     def test_generic_secret_also_stops_before_any_model(self):
         v = entropy_value()
