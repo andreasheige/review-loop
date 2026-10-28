@@ -313,6 +313,7 @@ def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verif
                 if f["id"] not in suppress or needs_verify(f):  # an advisory that now has a failure scenario
                     found.setdefault(f["id"], f)
         prior_status = {f["id"]: f["status"] for f in prior}
+        prior_verification = {f["id"]: f.get("verification") for f in prior}
         for f in prior:
             found[f["id"]] = {k: v for k, v in f.items() if k not in ("status", "verification")}
         record["reviewed_paths"] = list(eligible)
@@ -341,10 +342,18 @@ def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verif
             f["status"] = "discarded" if vs and all(v["verdict"] == "refuted" for v in vs) else was
         else:
             f["status"] = status(f, vs)
-        if vs:  # the deciding verdict: the first that did not confirm, else the first
+        if was and f["status"] != "discarded":  # still open: a confirmation from now, else the one that opened it
+            v = next((v for v in vs if v["verdict"] == "confirmed"), None)
+            if v is None:
+                if prior_verification[f["id"]]:
+                    f["verification"] = prior_verification[f["id"]]
+                continue
+        elif vs:  # the deciding verdict: the first that did not confirm, else the first
             v = next((v for v in vs if v["verdict"] != "confirmed"), vs[0])
-            f["verification"] = {"verdict": v["verdict"], "reasoning": v["reasoning"],
-                                 "counter_evidence": v["counter_evidence"], "family": v["family"]}
+        else:
+            continue
+        f["verification"] = {"verdict": v["verdict"], "reasoning": v["reasoning"],
+                             "counter_evidence": v["counter_evidence"], "family": v["family"]}
     return list(found.values())
 
 
