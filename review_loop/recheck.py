@@ -12,20 +12,55 @@ ticket paths changed since the last completed round's head (the merge-base if no
 again against the whole ticket diff and stays open unless every verifier refutes it (proven ones stay for their
 repro). A round that stops or errors keeps the open findings in its record. Same patch-id as the latest completed
 round and no new scan hit in the history: its outcome is reported again without a model. A branch that no longer
-changes anything against the base gets the scan only. Cap: round 3 (two rechecks); open findings then exit 2. Past
-the cap only the scan runs: a hard hit exits 1, anything else exits 2 (a human looks at the change).
+changes anything against the base gets the scan only. Cap: round 3 (two rechecks); open findings then exit 2. A fix
+round that changes existing test lines, or more than FIX_LINE_CAP lines, adds a control-weakening needs_human
+finding. Past the cap only the scan runs: a hard hit exits 1, anything else exits 2 (a human looks at the change).
 """
 from __future__ import annotations
 
+import fnmatch
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import eot, scan, workers
+from . import eot, normalise, scan, workers
 from .gitdiff import GitError, git, verify_commit
 
 MAX_ROUND = 3
 OPEN = ("blocking", "proven")
+# a fix may add tests but not change existing ones; fnmatch's * also matches /
+PROTECTED_TESTS = ("tests/*", "test/*", "*/tests/*", "*/test/*", "*/__tests__/*", "test_*.py", "*/test_*.py",
+                   "*_test.*", "*.test.*", "*.spec.*")
+FIX_LINE_CAP = 200
+
+
+def fix_check(rule: str, title: str, path: str, line: int, reasoning: str) -> dict:
+    return {"id": f"sec-reviewloop-{normalise.sha1(f'{rule}|{path}')[:12]}", "reasoning": reasoning,
+            "lens": "conformance", "title": title, "sites": [{"path": path, "start_line": line, "end_line": line}],
+            "failure_scenario": None, "evidence": {"kind": "tool", "ref": f"review-loop:{rule}"},
+            "rule_class": "control-weakening", "introduced_by": "diff", "status": "needs_human"}
+
+
+def fix_checks(repo: str, since: str, head: str, paths: list[str]) -> list[dict]:
+    """Fixes (since the eot round) that change or remove existing lines of a test, or exceed FIX_LINE_CAP, go to a human:
+    the cheapest way to make a finding go away is to weaken the test that shows it."""
+    out, changed = [], 0
+    for path in paths:
+        diff = git(repo, "--literal-pathspecs", "diff", "-U0", "--no-color", "--no-ext-diff", since, head, "--",
+                   path).stdout.decode("utf-8", "replace")
+        lines = diff.splitlines()
+        removed = [ln for ln in lines if ln.startswith("-") and not ln.startswith("---")]
+        changed += len(removed) + sum(ln.startswith("+") and not ln.startswith("+++") for ln in lines)
+        if removed and any(fnmatch.fnmatch(path, g) for g in PROTECTED_TESTS):
+            m = re.search(r"^@@ -\d+(?:,\d+)? \+(\d+)", diff, re.M)
+            out.append(fix_check("fix-edits-test", "Fix changes or removes existing test lines", path,
+                                 max(1, int(m.group(1))) if m else 1,
+                                 f"{len(removed)} existing line(s) of a test changed or removed in a fix round."))
+    if changed > FIX_LINE_CAP and paths:
+        out.append(fix_check("fix-too-large", f"Fix changes more than {FIX_LINE_CAP} lines", paths[0], 1,
+                             f"{changed} lines changed since the eot round."))
+    return out
 
 
 def known_entry(f: dict) -> dict:
@@ -115,6 +150,10 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
             raise eot.StopReview
         kept = [c for c in eot.changes(repo, since, head) if not eot.skipped(c[1])
                 and (c[1] in ticket_paths or c[2] in ticket_paths)]
+        if done:  # fix rounds, counted from the eot round so a later round can't hide an earlier edit
+            first = done[0][0]["head"]
+            fixed = sorted({c[1] for c in eot.changes(repo, first, head) if c[1] in ticket_paths or c[2] in ticket_paths})
+            record["findings"] += fix_checks(repo, first, head, fixed)
         eligible = sorted(p for st, p, _ in kept if st != "D")
         deleted = sorted(p for st, p, _ in kept if st == "D")
         diff_paths = sorted({p for _, p, src in kept for p in (p, src) if p})
