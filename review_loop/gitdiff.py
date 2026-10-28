@@ -40,17 +40,23 @@ def _unquote(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def added_lines(repo: str, staged: bool, base: str | None = None, head: str | None = None) -> dict[str, dict[int, str]]:
-    return _lines(repo, staged, base, head, removed=False)
+def added_lines(repo: str, staged: bool, base: str | None = None, head: str | None = None,
+                text: bool = False) -> dict[str, dict[int, str]]:
+    """{path: {line number: added text}}. text=True also reads files git would show as binary (a committed
+    `-diff` attribute must not hide them); the caller drops real binaries."""
+    return _lines(repo, staged, base, head, removed=False, text=text, renames=True)
 
 
-def removed_lines(repo: str, staged: bool, base: str | None = None, head: str | None = None) -> dict[str, dict[int, str]]:
-    """Like added_lines, for the old side: {old path: {old line number: text}}."""
-    return _lines(repo, staged, base, head, removed=True)
+def removed_lines(repo: str, staged: bool, base: str | None = None, head: str | None = None,
+                  text: bool = False) -> dict[str, dict[int, str]]:
+    """Like added_lines, for the old side: {old path: {old line number: text}}. No rename detection, so a file
+    moved elsewhere shows every line as removed."""
+    return _lines(repo, staged, base, head, removed=True, text=text, renames=False)
 
 
-def _lines(repo, staged, base, head, removed: bool) -> dict[str, dict[int, str]]:
-    out = git(repo, "diff", "-U0", "-M", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/",
+def _lines(repo, staged, base, head, removed: bool, text: bool, renames: bool) -> dict[str, dict[int, str]]:
+    out = git(repo, "diff", "-U0", "-M" if renames else "--no-renames", *(["--text", "--no-textconv"] if text else []),
+              "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/",
               *diff_args(staged, base, head)).stdout
     files: dict[str, dict[int, str]] = {}
     path, lineno, in_hunk = None, 0, False
@@ -61,6 +67,8 @@ def _lines(repo, staged, base, head, removed: bool) -> dict[str, dict[int, str]]
             path, in_hunk = None, False
         elif not in_hunk and raw.startswith(header):
             target = raw[4:]
+            if target.endswith(b"\t"):  # git appends a tab to header paths that contain a space
+                target = target[:-1]
             path = None if target == b"/dev/null" else _unquote(target)
             if path and path.startswith(prefix):
                 path = path[2:]
@@ -73,6 +81,12 @@ def _lines(repo, staged, base, head, removed: bool) -> dict[str, dict[int, str]]
         elif in_hunk and raw.startswith(b" "):
             lineno += 1
     return files
+
+
+def is_binary(repo: str, spec: str) -> bool:
+    """True when the blob at <rev>:<path> (or :<path>) holds a NUL byte; False when it does not exist."""
+    p = git(repo, "cat-file", "blob", spec, check=False)
+    return p.returncode == 0 and b"\0" in p.stdout[:65536]
 
 
 def show(repo: str, spec: str) -> str | None:

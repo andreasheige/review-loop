@@ -1,6 +1,9 @@
 """review-loop accept: a human's override of one finding, per (finding id, rule_class), never per patch-id.
 
-usage: review-loop accept <finding-id> --reason TEXT [--expires YYYY-MM-DD] [--rule-class CLASS]
+usage: review-loop accept <finding-id> --reason TEXT [--expires YYYY-MM-DD] [--rule-class CLASS] [--base REF]
+
+The finding must exist (newest eot/recheck record, else a policy scan of merge-base(base, HEAD)..HEAD) and its rule
+class must match; the terminal prompt shows its status, place and title.
 
 Needs a "y" typed at the terminal (/dev/tty), which an agent's shell does not have. Every security class needs
 --expires (at most 90 days ahead); only a review accept (a rev- finding) may have none. A review accept never
@@ -37,7 +40,8 @@ def load(repo: str, today: date | None = None) -> list[dict]:
         return []
     out = []
     for a in rows:
-        if not isinstance(a, dict) or a.get("tty") is not True or a.get("rule_class") not in CLASSES:
+        if (not isinstance(a, dict) or a.get("tty") is not True or a.get("rule_class") not in CLASSES
+                or not isinstance(a.get("finding_id"), str) or not isinstance(a.get("reason"), str)):
             continue
         exp = a.get("expires")
         if exp is None and a["rule_class"] != "review":
@@ -61,6 +65,22 @@ def apply(repo: str, findings: list[dict]) -> list[dict]:
     return findings
 
 
+def lookup(repo: str, finding_id: str, base_ref: str | None = None) -> dict | None:
+    """The finding as last seen: the newest eot/recheck record holding it, else a policy scan of the branch."""
+    from . import eot
+
+    top = git(repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
+    common = Path(top, git(top, "rev-parse", "--git-common-dir").stdout.decode().strip())
+    hits = [(r["created_at"], f) for r, _ in eot.records(common) for f in r["findings"] if f["id"] == finding_id]
+    if hits:
+        return max(hits, key=lambda x: x[0])[1]
+    base = git(top, "merge-base", base_ref or eot.default_base(top), "HEAD", check=False).stdout.decode().strip()
+    if not base:
+        return None
+    live = scan.run(top, staged=False, rng=f"{base}..HEAD", policy=True)
+    return next((f for f in live["findings"] if f["id"] == finding_id), None)
+
+
 def command(f: dict) -> str:
     """The exact command a human runs to accept a finding (printed for headless harnesses)."""
     rc = f.get("rule_class") or "review"
@@ -76,6 +96,7 @@ def main(argv: list[str], confirm=None) -> int:
     ap.add_argument("--reason", required=True)
     ap.add_argument("--expires", metavar="YYYY-MM-DD")
     ap.add_argument("--rule-class", choices=CLASSES)
+    ap.add_argument("--base", help="base ref for finding a scan finding (default as eot)")
     a = ap.parse_args(argv)
     rc = a.rule_class or ("review" if a.finding_id.startswith("rev-") else None)
 
@@ -98,7 +119,17 @@ def main(argv: list[str], confirm=None) -> int:
             return refuse("--expires must be YYYY-MM-DD")
         if not date.today() <= exp <= date.today() + timedelta(days=MAX_DAYS):
             return refuse(f"--expires must be between today and {MAX_DAYS} days ahead")
-    if not (confirm or confirm_on_tty)(f"Accept {a.finding_id} ({rc}) until {a.expires or 'revoked'}: {a.reason}?"):
+    try:
+        f = lookup(".", a.finding_id, a.base)
+    except GitError as e:
+        return refuse(str(e))
+    if not f:
+        return refuse(f"no finding {a.finding_id} in this repo's records or in a scan of this branch")
+    if (f.get("rule_class") or "review") != rc:
+        return refuse(f"{a.finding_id} is {f.get('rule_class') or 'review'}, not {rc}")
+    site = f["sites"][0]
+    if not (confirm or confirm_on_tty)(f"Accept {f['status'].upper()} {rc} finding at {site['path']}:{site['start_line']}"
+                                       f" — {f['title']} — until {a.expires or 'revoked'}, because: {a.reason}?"):
         return refuse("needs a human at the terminal")
     row = {"finding_id": a.finding_id, "rule_class": rc, "reason": a.reason.strip(), "expires": a.expires,
            "accepted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "tty": True}
