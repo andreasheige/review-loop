@@ -8,6 +8,7 @@ import subprocess
 from .tools import SAFE_PATH
 
 HUNK = re.compile(rb"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+OLD_HUNK = re.compile(rb"^@@ -(\d+)")
 
 
 class GitError(Exception):
@@ -40,23 +41,33 @@ def _unquote(raw: bytes) -> str:
 
 
 def added_lines(repo: str, staged: bool, base: str | None = None, head: str | None = None) -> dict[str, dict[int, str]]:
+    return _lines(repo, staged, base, head, removed=False)
+
+
+def removed_lines(repo: str, staged: bool, base: str | None = None, head: str | None = None) -> dict[str, dict[int, str]]:
+    """Like added_lines, for the old side: {old path: {old line number: text}}."""
+    return _lines(repo, staged, base, head, removed=True)
+
+
+def _lines(repo, staged, base, head, removed: bool) -> dict[str, dict[int, str]]:
     out = git(repo, "diff", "-U0", "-M", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/",
               *diff_args(staged, base, head)).stdout
     files: dict[str, dict[int, str]] = {}
     path, lineno, in_hunk = None, 0, False
+    header, prefix, sign, hunk = (b"--- ", "a/", b"-", OLD_HUNK) if removed else (b"+++ ", "b/", b"+", HUNK)
     # split on \n only: str.splitlines() would also split on U+2028, U+0085 … and shift line numbers
     for raw in out.split(b"\n"):
         if raw.startswith(b"diff --git "):
             path, in_hunk = None, False
-        elif not in_hunk and raw.startswith(b"+++ "):
+        elif not in_hunk and raw.startswith(header):
             target = raw[4:]
             path = None if target == b"/dev/null" else _unquote(target)
-            if path and path.startswith("b/"):
+            if path and path.startswith(prefix):
                 path = path[2:]
         elif raw.startswith(b"@@"):
-            m = HUNK.match(raw)
+            m = hunk.match(raw)
             in_hunk, lineno = bool(m and path), int(m.group(1)) if m else 0
-        elif in_hunk and raw.startswith(b"+"):
+        elif in_hunk and raw.startswith(sign):
             files.setdefault(path, {})[lineno] = raw[1:].decode("utf-8", "replace")
             lineno += 1
         elif in_hunk and raw.startswith(b" "):

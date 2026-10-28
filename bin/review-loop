@@ -4,13 +4,14 @@
        review-loop recheck   (same flags as eot; only what changed since the last record, max 2 rechecks)
        review-loop label <finding-id> fixed|wrong|intentional|noise [--evidence TEXT]
        review-loop stats [--repo PATH]... [--csv PATH]
+       review-loop accept <finding-id> --reason TEXT [--expires YYYY-MM-DD] [--rule-class CLASS]   (needs a terminal)
        review-loop worker --harness claude|codex --role find|verify --model M --input FILE [--repo DIR] [--rev REV]"""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-COMMANDS = ("scan", "eot", "recheck", "label", "stats", "worker")
+COMMANDS = ("scan", "eot", "recheck", "label", "stats", "accept", "worker")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
@@ -27,6 +28,9 @@ if __name__ == "__main__":
     if sys.argv[1] == "recheck":
         from review_loop import recheck
         sys.exit(recheck.main(sys.argv[2:]))
+    if sys.argv[1] == "accept":
+        from review_loop import accept
+        sys.exit(accept.main(sys.argv[2:]))
     if sys.argv[1] in ("label", "stats"):
         from review_loop import stats
         sys.exit((stats.main_label if sys.argv[1] == "label" else stats.main_stats)(sys.argv[2:]))
