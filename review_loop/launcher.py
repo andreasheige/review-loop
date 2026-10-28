@@ -6,7 +6,7 @@ What each layer stops:
   instructions, and tracked `.env*` files in the reviewed repo. Git hooks are off for the checkout itself.
 - worker_env: tokens and session vars of the calling harness (GITHUB_TOKEN, TT_*, CLAUDECODE, ...).
 - codex_home: a scratch CODEX_HOME holding only a link to auth.json, so ~/.codex hooks.json (tt), AGENTS.md,
-  rules and memories never load. Claude's equivalent is --restricted --safe-mode in workers.run_claude.
+  rules and memories never load. copilot_home does the same for Copilot. Claude's equivalent is --restricted --safe-mode in workers.run_claude.
 """
 from __future__ import annotations
 
@@ -73,4 +73,15 @@ def codex_home():
     with tempfile.TemporaryDirectory(prefix="review-loop-codex-home-") as td:
         if (real / "auth.json").exists():
             os.symlink(real / "auth.json", Path(td) / "auth.json")
+        yield td
+
+
+@contextmanager
+def copilot_home():
+    """A scratch COPILOT_HOME with config.json linked from the real one (never read here; it carries the login and
+    the model policy), so ~/.copilot hooks, skills, plugins, MCP config and memories never load."""
+    real = Path(os.environ.get("COPILOT_HOME") or Path.home() / ".copilot")
+    with tempfile.TemporaryDirectory(prefix="review-loop-copilot-home-") as td:
+        if (real / "config.json").exists():
+            os.symlink(real / "config.json", Path(td) / "config.json")
         yield td
