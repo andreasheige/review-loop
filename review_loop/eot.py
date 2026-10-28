@@ -27,8 +27,8 @@ from pathlib import Path, PurePosixPath
 from . import deps, launcher, normalise, scan, workers
 from .gitdiff import GitError, git, verify_commit
 
-FAMILY = {"claude": "claude", "codex": "gpt"}
-DEFAULT_MODEL = {"claude": "opus", "codex": None}
+FAMILY = {"claude": "claude", "codex": "gpt", "copilot": "gpt"}  # copilot runs a GPT model
+DEFAULT_MODEL = {"claude": "opus", "codex": None, "copilot": workers.COPILOT_MODEL}
 NON_AUTHOR = {"claude": ["codex"], "gpt": ["claude"], "unknown": ["claude", "codex"]}
 CANARY = re.compile(r"REVIEWLOOP_CANARY_[A-Z0-9]{20}")
 DOC_SUFFIXES = {".md", ".mdx", ".rst", ".adoc"}  # not .txt: requirements.txt is a manifest
@@ -103,7 +103,7 @@ def intent(repo: str, base: str, head: str, ticket: str | None, text: str | None
 def worker_spec(spec: str) -> tuple[str, str | None]:
     harness, _, model = spec.partition(":")
     if harness not in FAMILY:
-        raise argparse.ArgumentTypeError(f"unknown harness {harness!r} (claude|codex)")
+        raise argparse.ArgumentTypeError(f"unknown harness {harness!r} (claude|codex|copilot)")
     return harness, model or DEFAULT_MODEL[harness]
 
 
@@ -116,11 +116,13 @@ def run_worker(spec, role, prompt, schema, cwd, runner, check=None) -> tuple[dic
     t0 = time.monotonic()
     if harness == "claude":
         res = workers.run_claude(prompt, schema, cwd, model, runner, check)
+    elif harness == "copilot":
+        res = workers.run_copilot(prompt, schema, cwd, model, runner, check)
     else:
         res = workers.run_codex(prompt, schema, cwd, model, runner, check)
     entry = {"role": role, "family": FAMILY[harness], "harness": harness, "model": model or "default",
              "wall_seconds": round(time.monotonic() - t0, 1),
-             "tokens": sum(v for k, v in res["usage"].items() if k != "cost_usd" and isinstance(v, int))}
+             "tokens": sum(v for k, v in res["usage"].items() if "tokens" in k and isinstance(v, int))}
     return res["output"], entry
 
 
