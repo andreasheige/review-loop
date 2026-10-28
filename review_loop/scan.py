@@ -44,7 +44,8 @@ def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = Non
         errors.append(f"D1: {e}")
 
     try:
-        added = gitdiff.added_lines(repo, staged, base, head)
+        added = (policy_classes.text_lines(repo, staged, base, head, removed=False) if policy  # no -diff hiding
+                 else gitdiff.added_lines(repo, staged, base, head))
         findings += unicode_check.scan(added)
         lockfiles = [
             (p, gitdiff.show(repo, f"HEAD:{p}" if staged else f"{base}:{p}"), gitdiff.show(repo, f":{p}" if staged else f"{head}:{p}"))
@@ -59,7 +60,7 @@ def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = Non
                         f["status"] = "advisory"
             findings += dep
         if policy:
-            findings += policy_classes.scan(repo, staged, base, head, added)
+            findings += policy_classes.scan(repo, staged, base, head)
     except gitdiff.GitError as e:
         errors.append(f"D2: {e}")
     finally:
@@ -74,7 +75,8 @@ def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = Non
     return {**result(accept.apply(repo, findings), errors, tools, sarif), "policy": True}
 
 
-BOT = re.compile(r"\[bot\]@|dependabot|renovate", re.I)
+# exact GitHub bot noreply addresses; an author email is set by whoever commits, so this only ever downgrades dep-young
+BOT = re.compile(r"\d+\+(dependabot|renovate)\[bot\]@users\.noreply\.github\.com")
 MANIFESTS = {"package.json", "pyproject.toml", "requirements.txt", "go.mod", "Cargo.toml", "Gemfile"}
 
 
@@ -82,7 +84,7 @@ def bot_lockfile_only(repo: str, base: str, head: str) -> bool:
     """Every commit in the range is a bot's and touches only lockfiles/manifests (Dependabot, Renovate)."""
     authors = gitdiff.git(repo, "log", "--format=%ae", f"{base}..{head}").stdout.decode().split()
     paths = policy_classes.changed_paths(repo, False, base, head)
-    return bool(authors) and all(BOT.search(a) for a in authors) and bool(paths) and all(
+    return bool(authors) and all(BOT.fullmatch(a) for a in authors) and bool(paths) and all(
         Path(p).name in set(deps.LOCKFILES) | MANIFESTS for p in paths)
 
 

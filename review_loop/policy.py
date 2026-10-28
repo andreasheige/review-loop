@@ -4,7 +4,11 @@ by a model; a human decides, or records a time-limited `review-loop accept`.
 - config: agent instructions, CI workflows, scanner and git-hook config, `.review-loop.toml` — added, changed or
   deleted
 - suppression: an added line with a lint/type/scanner suppression comment
-- deleted-assertion: a removed assertion in a test file
+- skipped-test: an added skip/only/xfail/ignore marker in a test file
+- deleted-assertion: a removed assertion in a test file (a renamed-away test counts as removed)
+- symlink / submodule: an added or changed symlink or gitlink (a symlink can point agent config elsewhere)
+
+Diff lines are read as text whatever .gitattributes says (a committed `-diff` must not hide a file).
 
 Runs only when asked (`scan --policy`, eot, recheck): the pre-commit hook keeps its D1–D3 scan.
 """
@@ -15,23 +19,37 @@ import re
 
 from . import gitdiff, normalise
 
-CONFIG = (
-    ("agent-config", re.compile(r"(^|/)(AGENTS|CLAUDE|GEMINI)[^/]*\.md$|(^|/)\.(claude|codex|cursor|gemini|agents)/|"
-                                r"(^|/)\.mcp\.json$|copilot-instructions\.md$|(^|/)\.cursorrules$")),
-    ("ci-config", re.compile(r"(^|/)\.github/workflows/|(^|/)azure-pipelines[^/]*\.ya?ml$|(^|/)\.gitlab-ci\.ya?ml$|"
-                             r"(^|/)\.circleci/|(^|/)Jenkinsfile$")),
-    ("scanner-config", re.compile(r"(^|/)\.gitleaks(\.toml|ignore)$|(^|/)\.semgrep(ignore|\.ya?ml)?$|(^|/)\.trivyignore$|"
-                                  r"(^|/)\.?osv-scanner\.toml$|(^|/)\.snyk$|(^|/)\.github/dependabot\.ya?ml$|(^|/)CODEOWNERS$")),
-    ("git-hooks", re.compile(r"(^|/)\.husky/|(^|/)\.githooks/|(^|/)lefthook\.ya?ml$|(^|/)\.pre-commit-config\.ya?ml$")),
-    ("review-loop-config", re.compile(r"(^|/)\.review-loop\.toml$")),
+D = r"(/|$)"  # a directory name, or the name alone (a symlink to a directory shows as a file path)
+CONFIG = (  # case-insensitive: claude.md loads as CLAUDE.md on APFS
+    ("agent-config", re.compile(r"(^|/)(AGENTS|CLAUDE|GEMINI)[^/]*\.md$|(^|/)\.(claude|codex|cursor|gemini|agents?|"
+                                r"windsurf[^/]*|continue|clinerules|pi)" + D + r"|(^|/)\.mcp\.json$|copilot-instructions\.md$|"
+                                r"(^|/)\.cursorrules$|(^|/)\.github/(instructions|prompts|agents)" + D +
+                                r"|(^|/)\.vscode/(mcp|settings)\.json$", re.I)),
+    ("ci-config", re.compile(r"(^|/)\.github/(workflows|actions)" + D + r"|(^|/)azure-pipelines[^/]*\.ya?ml$|"
+                             r"(^|/)\.azure-?pipelines?" + D + r"|(^|/)\.gitlab-ci\.ya?ml$|(^|/)\.(circleci|buildkite)" + D +
+                             r"|(^|/)Jenkinsfile$|(^|/)bitbucket-pipelines\.ya?ml$", re.I)),
+    ("scanner-config", re.compile(r"(^|/)\.gitleaks(\.toml|ignore)$|(^|/)\.semgrep(ignore|\.ya?ml)?" + D +
+                                  r"|(^|/)\.?trivy(ignore|\.ya?ml)$|(^|/)\.?osv-scanner\.toml$|(^|/)\.snyk$|"
+                                  r"(^|/)\.github/dependabot\.ya?ml$|(^|/)CODEOWNERS$|(^|/)\.gitattributes$|(^|/)\.gitmodules$|"
+                                  r"(^|/)\.(npmrc|yarnrc(\.yml)?)$|(^|/)pip\.conf$", re.I)),
+    ("git-hooks", re.compile(r"(^|/)\.(husky|githooks)" + D + r"|(^|/)lefthook\.ya?ml$|(^|/)\.pre-commit-config\.ya?ml$",
+                             re.I)),
+    ("review-loop-config", re.compile(r"(^|/)\.review-loop\.toml$", re.I)),
 )
 SURFACE = {"agent-config": "agent-config", "ci-config": "workflow"}
-SUPPRESSION = re.compile(r"eslint-disable|@ts-(ignore|nocheck|expect-error)|#\s*noqa\b|#\s*type:\s*ignore|#\s*nosec\b|"
-                         r"nosemgrep|gitleaks:allow|NOSONAR|#pragma\s+warning\s+disable|SuppressMessage|"
-                         r"pylint:\s*disable|//\s*nolint|@SuppressWarnings|(istanbul|c8)\s+ignore", re.I)
-ASSERTION = re.compile(r"\bassert|\bexpect\s*\(|\.should\b|\bAssert\.|assertThat|\bverify\s*\(")
-TEST_FILES = ("tests/*", "test/*", "*/tests/*", "*/test/*", "*/__tests__/*", "test_*.py", "*/test_*.py",
-              "*_test.*", "*.test.*", "*.spec.*", "*Tests.cs", "*Test.java")
+SUPPRESSION = re.compile(r"eslint-disable|biome-ignore|@ts-(ignore|nocheck|expect-error)|#\s*(ruff:\s*)?noqa\b|"
+                         r"#\s*(type|pyright):\s*ignore|#\s*mypy:|#\s*nosec\b|nosemgrep|gitleaks:allow|trufflehog:ignore|"
+                         r"pragma:\s*(allowlist\s+secret|no\s+cover)|NOSONAR|#pragma\s+warning\s+disable|SuppressMessage|"
+                         r"ReSharper\s+disable|<NoWarn>|pylint:\s*disable|rubocop:\s*disable|//\s*nolint|lint:ignore|"
+                         r"@SuppressWarnings|#!?\[allow\(|(istanbul|c8|v8)\s+ignore|phpcs:ignore|@phpstan-ignore|"
+                         r"shellcheck\s+disable|checkov:skip|tfsec:ignore|trivy:ignore|hadolint\s+ignore", re.I)
+ASSERTION = re.compile(r"\bassert|\bexpect\s*\(|\.should\b|\bAssert\.|assertThat|\bverify\s*\(|XCTAssert|"
+                       r"pytest\.raises|\bt\.(Error|Fatal)|\brequire\.", re.I)
+SKIP_TEST = re.compile(r"@pytest\.mark\.(skip|xfail)|\b(it|describe|test)\.(skip|only|todo)\b|\bx(it|describe)\s*\(|"
+                       r"\[Ignore\b|@Disabled\b|@Ignore\b|\bt\.Skip(Now|f)?\(|unittest\.skip|\bpending\s*\(")
+TEST_FILES = ("tests/*", "test/*", "*/tests/*", "*/test/*", "*/__tests__/*", "spec/*", "*/spec/*", "*/Tests/*",
+              "test_*.py", "*/test_*.py", "*_test.*", "*.test.*", "*.spec.*", "*_spec.rb", "*Tests.cs", "*Test.java",
+              "*Test.kt", "*Tests.swift")
 
 
 def hit(rule: str, path: str, line: int, title: str, k: str, surface: str = "code") -> dict:
@@ -40,26 +58,57 @@ def hit(rule: str, path: str, line: int, title: str, k: str, surface: str = "cod
                              ref=f"review-loop:{rule}")
 
 
+def changed(repo: str, staged: bool, base: str | None, head: str | None) -> list[tuple[str, str, str]]:
+    """(path, new mode, status) for every change, renames split into delete + add."""
+    out = gitdiff.git(repo, "diff", "--raw", "-z", "--no-renames", "--no-abbrev",
+                      *gitdiff.diff_args(staged, base, head)).stdout.decode("utf-8", "replace").split("\0")
+    res = []
+    for meta, path in zip(out[0::2], out[1::2]):
+        parts = meta.lstrip(":").split()
+        if len(parts) >= 5:
+            res.append((path, parts[1], parts[4][:1]))
+    return res
+
+
 def changed_paths(repo: str, staged: bool, base: str | None, head: str | None) -> list[str]:
-    out = gitdiff.git(repo, "diff", "--name-only", "-z", "--no-renames", *gitdiff.diff_args(staged, base, head)).stdout
-    return [p for p in out.decode("utf-8", "replace").split("\0") if p]
+    return [p for p, _, _ in changed(repo, staged, base, head)]
 
 
-def scan(repo: str, staged: bool, base: str | None, head: str | None, added: dict[str, dict[int, str]]) -> list[dict]:
+def is_test(path: str) -> bool:
+    return any(fnmatch.fnmatch(path, g) for g in TEST_FILES)
+
+
+def text_lines(repo: str, staged: bool, base: str | None, head: str | None, removed: bool) -> dict[str, dict[int, str]]:
+    """Diff lines read as text whatever .gitattributes says, minus files that really are binary."""
+    lines = (gitdiff.removed_lines if removed else gitdiff.added_lines)(repo, staged, base, head, text=True)
+    side = (base if removed else head) if not staged else ("HEAD" if removed else "")
+    return {p: v for p, v in lines.items() if not gitdiff.is_binary(repo, f"{side}:{p}")}
+
+
+def scan(repo: str, staged: bool, base: str | None, head: str | None) -> list[dict]:
     out = []
-    for path in changed_paths(repo, staged, base, head):
+    side = "" if staged else head
+    for path, mode, status in changed(repo, staged, base, head):
+        if status != "D" and mode == "120000":
+            out.append(hit("symlink", path, 1, f"Symlink added or changed: {path}", mode))
+        elif status != "D" and mode == "160000":
+            out.append(hit("submodule", path, 1, f"Submodule pointer added or changed: {path}", mode))
         for rule, rx in CONFIG:
             if rx.search(path):
-                out.append(hit(rule, path, 1, f"Change to {rule.replace('-', ' ')}: {path}", "", SURFACE.get(rule, "code")))
+                blob = "deleted" if status == "D" else gitdiff.git(repo, "rev-parse", f"{side}:{path}").stdout.decode().strip()
+                out.append(hit(rule, path, 1, f"Change to {rule.replace('-', ' ')}: {path}", blob,
+                               SURFACE.get(rule, "code")))
                 break
-    for path, lines in added.items():
+    for path, lines in text_lines(repo, staged, base, head, removed=False).items():
         for n, text in lines.items():
             m = SUPPRESSION.search(text)
-            if m:
+            if m:  # keyed on the line and the one after it, so one accept doesn't cover a later identical comment
                 out.append(hit("suppression", path, n, f"New suppression ({m.group(0).strip()}) in {path}",
-                               normalise.sha1(text.strip())))
-    for path, lines in gitdiff.removed_lines(repo, staged, base, head).items():
-        if not any(fnmatch.fnmatch(path, g) for g in TEST_FILES):
+                               normalise.sha1(text.strip() + "\n" + lines.get(n + 1, "").strip())))
+            elif is_test(path) and SKIP_TEST.search(text):
+                out.append(hit("skipped-test", path, n, f"Test skipped or focused in {path}", normalise.sha1(text.strip())))
+    for path, lines in text_lines(repo, staged, base, head, removed=True).items():
+        if not is_test(path):
             continue
         for n, text in lines.items():
             if ASSERTION.search(text):

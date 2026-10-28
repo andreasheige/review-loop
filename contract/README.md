@@ -55,7 +55,7 @@ Stable across `--staged`, `--range` and rebase: no line number or commit SHA.
 - Keyed per `(finding_id, rule_class)`, never per patch-id. Re-evaluated live by `gate`.
 - Every security class needs `expires`. Only `rule_class=review` may have `expires: null`.
 - A `review` accept never clears a `hard` or `needs_human` finding.
-- Applied only in policy mode (`scan --policy`, eot, recheck, later gate), never by the pre-commit `scan --staged`, so a line written to `accepts.jsonl` cannot weaken the commit-time D1–D3 check. `tty: true` is written by the CLI after the terminal prompt; like the records, the file itself is agent-editable (see Rounds, Known limits).
+- Applied only in policy mode (`scan --policy`, eot, recheck, later gate), never by the pre-commit `scan --staged`, so a line written to `accepts.jsonl` cannot weaken the commit-time D1–D3 check. `tty: true` is written by the CLI after the terminal prompt; like the records, the file itself is agent-editable (see Rounds, Known limits). The terminal check is a speed bump, not a boundary: an agent can fake a terminal (`script`, `expect`, `pty`); a guardrail rule against running `review-loop accept|label` under those is a possible later step. The young-dependency exemption for bot commits trusts the author email, which whoever commits sets, so it only ever downgrades `dep-young`.
 
 ## Record layout
 
