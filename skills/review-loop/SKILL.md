@@ -1,0 +1,38 @@
+---
+name: review-loop
+description: End-of-ticket review with the review-loop CLI — `eot` after the ticket's work is committed, then `recheck` after each fix. Use when finishing a ticket or feature branch, before opening a PR, or when asked to review a branch's changes. Also `scan` for a quick deterministic secret/Unicode/dependency check of staged changes or a range.
+---
+
+# review-loop
+
+CLI: `$REVIEW_LOOP_BIN`, else `review-loop` on `PATH`, else `~/Dev/review-loop/bin/review-loop`. Python 3.9+.
+
+## Finishing a ticket
+
+1. Commit the ticket's work on its feature branch, with an honest `Co-Authored-By` trailer: the reviewers are
+   picked from the other model family than the one that wrote the code.
+2. `review-loop eot --ticket <ticket.md> --format text` (or `--intent "<one line>"`; default base is
+   `origin/HEAD`, pass `--base <ref>` for an epic branch). It scans first, then a finder and a verifier from the other
+   model family review `merge-base..HEAD` in a read-only scratch worktree.
+3. Act on the exit code:
+   - `0` — done. It means no finding was reported, never "secure".
+   - `1` — fix each `blocking`/`hard` finding test-first, run the tests, commit, then
+     `review-loop recheck --ticket <ticket.md> --format text`. Recheck reads only what changed since the last round,
+     checks again whether the earlier findings still hold, and doesn't repeat advisory ones. `advisory` findings are
+     your call.
+   - `2` — stop and show the user the findings. Recheck also returns 2 after its second round with findings still
+     open. Don't start a fresh `eot` to get around it (it is refused on a branch that has rechecks).
+   - `3` — stop and report the error. A failed review never counts as a pass.
+4. Before pushing (after any rebase): `review-loop recheck` again. With an unchanged patch-id it only rescans.
+
+Never edit, delete or write anything under `$(git rev-parse --git-common-dir)/review-loop/`.
+
+## Scan only (no model)
+
+```
+review-loop scan --staged --format text
+review-loop scan --range origin/main..HEAD
+```
+
+D1 secrets (gitleaks, history included), D2 hidden Unicode, D3 new or changed dependency versions. Same exit codes.
+Scanners are pinned in `~/.config/review-loop/tools.lock`; if it is missing, say so — don't create or edit it.
