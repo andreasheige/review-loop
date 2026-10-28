@@ -286,9 +286,9 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(eot.status(f, []), "advisory")
 
     def test_default_workers_are_non_author(self):
-        self.assertEqual(eot.NON_AUTHOR["claude"], ["codex"])
+        self.assertEqual(eot.NON_AUTHOR["claude"], ["copilot"])
         self.assertEqual(eot.NON_AUTHOR["gpt"], ["claude"])
-        self.assertEqual(eot.NON_AUTHOR["unknown"], ["claude", "codex"])
+        self.assertEqual(eot.NON_AUTHOR["unknown"], ["claude", "copilot"])
 
 
 if __name__ == "__main__":

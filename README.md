@@ -14,5 +14,5 @@ Private and local for now, but written to be publishable.
 ## Commands
 
 - `bin/review-loop scan (--staged | --range A..B)`: deterministic D1–D3 checks, no model.
-- `bin/review-loop eot [--base REF] [--ticket PATH | --intent TEXT]`: end-of-ticket review of `merge-base(base, HEAD)..HEAD`. Scan first; a secret hit or scan error stops before any model sees the diff. Then a non-author finder and verifier (`--finder`/`--verifier HARNESS[:MODEL]` to override) and a record under `$(git rev-parse --git-common-dir)/review-loop/<patch-id>/round-1/`. Docs and lockfiles are skipped by file class, never paths that look security-relevant.
+- `bin/review-loop eot [--base REF] [--ticket PATH | --intent TEXT]`: end-of-ticket review of `merge-base(base, HEAD)..HEAD`. Scan first; a secret hit or scan error stops before any model sees the diff. Then a non-author finder and verifier (Claude-authored work goes to Copilot until the Codex quota is back; `--finder`/`--verifier HARNESS[:MODEL]` to override) and a record under `$(git rev-parse --git-common-dir)/review-loop/<patch-id>/round-1/`. Docs and lockfiles are skipped by file class, never paths that look security-relevant.
 - `bin/review-loop worker …`: one finder or verifier run, for debugging prompts.

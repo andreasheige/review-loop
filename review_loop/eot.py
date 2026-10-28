@@ -29,7 +29,7 @@ from .gitdiff import GitError, git, verify_commit
 
 FAMILY = {"claude": "claude", "codex": "gpt", "copilot": "gpt"}  # copilot runs a GPT model
 DEFAULT_MODEL = {"claude": "opus", "codex": None, "copilot": workers.COPILOT_MODEL}
-NON_AUTHOR = {"claude": ["codex"], "gpt": ["claude"], "unknown": ["claude", "codex"]}
+NON_AUTHOR = {"claude": ["copilot"], "gpt": ["claude"], "unknown": ["claude", "copilot"]}  # copilot until Codex quota is back (Decision 14)
 CANARY = re.compile(r"REVIEWLOOP_CANARY_[A-Z0-9]{20}")
 DOC_SUFFIXES = {".md", ".mdx", ".rst", ".adoc"}  # not .txt: requirements.txt is a manifest
 # never skipped, whatever the file class: agent config, CI, and anything named like a security control
