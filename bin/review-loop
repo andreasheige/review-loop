@@ -2,13 +2,15 @@
 """review-loop CLI. usage: review-loop scan (--staged | --range A..B) [--sarif PATH]
        review-loop eot [--base REF] [--rev REV] [--ticket PATH | --intent TEXT] [--finder H[:M]]... [--verifier H[:M]]...
        review-loop recheck   (same flags as eot; only what changed since the last record, max 2 rechecks)
+       review-loop label <finding-id> fixed|wrong|intentional|noise [--evidence TEXT]
+       review-loop stats [--repo PATH]... [--csv PATH]
        review-loop worker --harness claude|codex --role find|verify --model M --input FILE [--repo DIR] [--rev REV]"""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-COMMANDS = ("scan", "eot", "recheck", "worker")
+COMMANDS = ("scan", "eot", "recheck", "label", "stats", "worker")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
@@ -25,6 +27,9 @@ if __name__ == "__main__":
     if sys.argv[1] == "recheck":
         from review_loop import recheck
         sys.exit(recheck.main(sys.argv[2:]))
+    if sys.argv[1] in ("label", "stats"):
+        from review_loop import stats
+        sys.exit((stats.main_label if sys.argv[1] == "label" else stats.main_stats)(sys.argv[2:]))
     from review_loop import scan
 
     sys.exit(scan.main(sys.argv[2:]))
