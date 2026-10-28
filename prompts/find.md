@@ -21,7 +21,7 @@ Changed paths:
 {{CHANGED_PATHS}}
 
 Lenses to apply: {{LENSES}}
-</task>
+{{KNOWN}}</task>
 
 <lenses>
 - correctness: the code does not do what the intent says, or breaks on inputs, states or paths it must handle.

@@ -29,6 +29,25 @@
     },
     "round": {"type": "integer", "minimum": 1, "maximum": 3},
     "created_at": {"type": "string", "format": "date-time"},
+    "head": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Commit reviewed. recheck diffs from the last record's head."},
+    "branch": {"type": ["string", "null"], "description": "Branch checked out when reviewed: the ticket key that chains eot and recheck rounds."},
+    "previous": {
+      "description": "recheck: the record this round follows.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["patch_id", "round"],
+      "properties": {"patch_id": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "round": {"type": "integer", "minimum": 1, "maximum": 3}}
+    },
+    "settled": {
+      "description": "recheck: advisory model findings from earlier completed rounds; never reported again (by id). Fixed or discarded ones are re-verified if found again.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "lens", "path", "title"],
+        "properties": {"id": {"type": "string"}, "lens": {"type": "string"}, "path": {"type": "string"}, "title": {"type": "string"}}
+      }
+    },
     "author_family": {
       "description": "From the model in use, never from the harness. unknown -> both families find and both must confirm.",
       "enum": ["claude", "gpt", "unknown"]
