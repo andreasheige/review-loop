@@ -262,6 +262,57 @@ class RecheckTest(RepoCase):
         self.assertEqual(code, 1)
         self.assertEqual(next(f for f in out["findings"] if f["title"] == BUG["title"])["status"], "blocking")
 
+    # ---------------------------------------------------------------- fix checks
+
+    def with_test_file(self):
+        self.write("tests/test_calc.py", "from src.calc import add\n\n\ndef test_add():\n    assert add(2, 1) == 3\n")
+        self.commit("test: add")
+        self.base = self.git("rev-parse", "HEAD").strip()
+
+    def fix_checks(self, out):
+        return {f["evidence"]["ref"]: f for f in out["findings"] if f["rule_class"] == "control-weakening"}
+
+    def test_fix_that_edits_an_assertion_goes_to_a_human(self):
+        self.with_test_file()
+        self.blocked_eot()
+        self.write("tests/test_calc.py", "from src.calc import add\n\n\ndef test_add():\n    assert add(2, 1) == 1\n")
+        self.commit("fix: test")
+        code, out = self.recheck(FakeClaude({"findings": [], "reviewed_paths": ["tests/test_calc.py"]}, "refuted"))
+        self.assertEqual(code, 2)
+        f = self.fix_checks(out)["review-loop:fix-edits-test"]
+        self.assertEqual((f["status"], f["sites"][0]["path"], f["sites"][0]["start_line"]), ("needs_human", "tests/test_calc.py", 5))
+        self.assert_valid_record(out["record_path"])
+        self.edit("b + a")  # a later round can't hide the earlier edit
+        code, out = self.recheck(FakeClaude(CLEAN, "refuted"))
+        self.assertEqual((code, out["round"]), (2, 3))
+        self.assertIn("review-loop:fix-edits-test", self.fix_checks(out))
+
+    def test_fix_may_add_a_test(self):
+        self.with_test_file()
+        self.blocked_eot()
+        self.write("tests/test_more.py", "def test_more():\n    assert True\n")
+        self.write("src/calc.py", "def add(a, b):\n    return b + a\n")
+        self.commit("fix: add + test")
+        code, out = self.recheck(FakeClaude({"findings": [], "reviewed_paths": ["src/calc.py", "tests/test_more.py"]},
+                                            "refuted"))
+        self.assertEqual((code, self.fix_checks(out)), (0, {}))
+
+    def test_large_fix_goes_to_a_human(self):
+        self.blocked_eot()
+        self.write("src/big.py", "".join(f"x{i} = {i}\n" for i in range(250)))
+        self.write("src/calc.py", "def add(a, b):\n    return b + a\n")
+        self.commit("fix: big")
+        code, out = self.recheck(FakeClaude({"findings": [], "reviewed_paths": ["src/big.py", "src/calc.py"]}, "refuted"))
+        self.assertEqual(code, 2)
+        self.assertIn("review-loop:fix-too-large", self.fix_checks(out))
+
+    def test_eot_itself_may_change_tests(self):
+        self.with_test_file()
+        self.write("tests/test_calc.py", "from src.calc import add\n\n\ndef test_add():\n    assert add(2, 1) == 1\n")
+        self.commit("feat: change test")
+        code, out = self.eot(FakeClaude({"findings": [], "reviewed_paths": ["tests/test_calc.py"]}))
+        self.assertEqual((code, self.fix_checks(out)), (0, {}))
+
     def test_unchanged_patch_id_reports_the_last_outcome(self):
         self.blocked_eot()
         fake = FakeClaude(CLEAN)
