@@ -48,7 +48,9 @@ class FakeClaude:
 
 
 @unittest.skipUnless(GITLEAKS_ROW, "gitleaks not pinned in ~/.config/review-loop/tools.lock")
-class EotTest(unittest.TestCase):
+class RepoCase(unittest.TestCase):
+    """A throwaway repo with src/calc.py; shared with tests/test_recheck.py."""
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="review-loop-eot-"))
         self.addCleanup(shutil.rmtree, self.tmp)
@@ -97,9 +99,31 @@ class EotTest(unittest.TestCase):
         self.assertEqual(code, out["outcome"]["exit_code"])
         return code, out
 
+    def assert_valid_record(self, path):
+        uv = shutil.which("uv")
+        if not uv:
+            self.skipTest("uv not installed")
+        checker = (
+            "import json,sys\n"
+            "from jsonschema import Draft202012Validator\n"
+            "from referencing import Registry, Resource\n"
+            "s={n: json.load(open(f'contract/{n}.schema.json')) for n in ('finding','record')}\n"
+            "reg=Registry().with_resources((x['$id'], Resource.from_contents(x)) for x in s.values())\n"
+            "rec=json.load(open(sys.argv[1]))\n"
+            "errs=[e.message for e in Draft202012Validator(s['record'], registry=reg).iter_errors(rec)]\n"
+            "print('\\n'.join(errs)); sys.exit(1 if errs else 0)\n"
+        )
+        p = subprocess.run([uv, "run", "--offline", "--with", "jsonschema==4.26.0", "python", "-c", checker, path],
+                           capture_output=True, text=True, cwd=ROOT)
+        if "jsonschema" in p.stderr and p.returncode:
+            self.skipTest("jsonschema 4.26.0 not in the uv cache")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
     def by_lens(self, out):
         return {f["lens"]: f for f in out["findings"]}
 
+
+class EotTest(RepoCase):
     # ---------------------------------------------------------------- flow
 
     def test_confirmed_bug_blocks_and_nit_stays_advisory(self):
@@ -246,27 +270,10 @@ class EotTest(unittest.TestCase):
         self.assertEqual(first["key"]["patch_id"], second["key"]["patch_id"])
 
     def test_record_validates_against_contract(self):
-        uv = shutil.which("uv")
-        if not uv:
-            self.skipTest("uv not installed")
         self.change()
         _, out = self.eot(FakeClaude({"findings": [BUG, NIT, {**BUG, "lens": "security", "title": "sec"}],
                                       "reviewed_paths": ["src/calc.py"]}))
-        checker = (
-            "import json,sys\n"
-            "from jsonschema import Draft202012Validator\n"
-            "from referencing import Registry, Resource\n"
-            "s={n: json.load(open(f'contract/{n}.schema.json')) for n in ('finding','record')}\n"
-            "reg=Registry().with_resources((x['$id'], Resource.from_contents(x)) for x in s.values())\n"
-            "rec=json.load(open(sys.argv[1]))\n"
-            "errs=[e.message for e in Draft202012Validator(s['record'], registry=reg).iter_errors(rec)]\n"
-            "print('\\n'.join(errs)); sys.exit(1 if errs else 0)\n"
-        )
-        p = subprocess.run([uv, "run", "--offline", "--with", "jsonschema==4.26.0", "python", "-c", checker, out["record_path"]],
-                           capture_output=True, text=True, cwd=ROOT)
-        if "jsonschema" in p.stderr and p.returncode:
-            self.skipTest("jsonschema 4.26.0 not in the uv cache")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assert_valid_record(out["record_path"])
 
 
 class UnitTest(unittest.TestCase):
