@@ -376,3 +376,9 @@ class CopilotTest(unittest.TestCase):
             workers.run_copilot("p", VERIFIER, "/tmp", runner=runner)
         self.assertEqual(len(calls), 2)
         self.assertIn("not JSON", calls[1])
+
+    def test_session_error_is_named(self):
+        err = json.dumps({"type": "session.error", "data": {"message": "Authorization error. Your credentials may be expired."}})
+        with self.assertRaises(workers.WorkerError) as cm:
+            workers.run_copilot("p", VERIFIER, "/tmp", runner=lambda a, s, c, t, e: done(a, err + "\n", 1))
+        self.assertIn("Authorization error", str(cm.exception))

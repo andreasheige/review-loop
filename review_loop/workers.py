@@ -271,7 +271,7 @@ COPILOT_ARGS = ["--output-format", "json", "--allow-all-tools", "--available-too
 def parse_copilot(stdout: str) -> tuple:
     """(output or None, usage, error or None) from `copilot --output-format json` JSONL: the last non-empty
     assistant message, which must be one JSON object (a ```json fence around it is tolerated)."""
-    text, used = None, {}
+    text, used, failure = None, {}, None
     for line in stdout.splitlines():
         try:
             ev = json.loads(line)
@@ -280,10 +280,12 @@ def parse_copilot(stdout: str) -> tuple:
         d = ev.get("data") if isinstance(ev, dict) and isinstance(ev.get("data"), dict) else {}
         if ev.get("type") == "assistant.message" and d.get("content"):
             text = d["content"]
+        elif ev.get("type") == "session.error" and isinstance(d.get("message"), str):
+            failure = d["message"][:300]  # e.g. expired credentials; Copilot's own text, no token in it
         elif ev.get("type") == "session.usage_checkpoint":
             used = {k: d[k] for k in ("totalPremiumRequests", "totalNanoAiu") if isinstance(d.get(k), int)}
     if text is None:
-        return None, used, "no assistant message"
+        return None, used, f"no assistant message ({failure})" if failure else "no assistant message"
     m = re.fullmatch(r"\s*```(?:json)?\s*(.*?)\s*```\s*", text, re.S)
     try:
         return json.loads(m.group(1) if m else text), used, None
