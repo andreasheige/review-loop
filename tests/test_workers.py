@@ -331,3 +331,48 @@ class RealOutput(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def copilot_stdout(content, model="gpt-6.1-sol"):
+    events = [{"type": "assistant.message", "data": {"model": model, "content": "", "toolRequests": [{"name": "view"}]}},
+              {"type": "assistant.message", "data": {"model": model, "content": content, "toolRequests": []}},
+              {"type": "session.usage_checkpoint", "data": {"totalPremiumRequests": 1, "totalNanoAiu": 5}}]
+    return "\n".join(json.dumps(e) for e in events) + "\n"
+
+
+class CopilotTest(unittest.TestCase):
+    def test_reads_last_message_and_keeps_tools_read_only(self):
+        seen = []
+
+        def runner(argv, stdin, cwd, timeout, env):
+            seen.append((argv, stdin, env))
+            return done(argv, copilot_stdout(json.dumps(GOOD_VERIFY)))
+
+        res = workers.run_copilot("p", VERIFIER, "/tmp", runner=runner)
+        self.assertEqual((res["output"], res["attempts"]), (GOOD_VERIFY, 1))
+        self.assertEqual(res["usage"], {"totalPremiumRequests": 1, "totalNanoAiu": 5})
+        argv, stdin, env = seen[0]
+        tools = argv[argv.index("--available-tools") + 1:argv.index("--disable-builtin-mcps")]
+        self.assertEqual(tools, ["view", "grep", "glob"])
+        self.assertEqual(argv[argv.index("--model") + 1], workers.COPILOT_MODEL)
+        self.assertNotIn("--allow-all-paths", argv)
+        self.assertIn("<output_schema>", stdin)
+        self.assertNotEqual(env["COPILOT_HOME"], os.path.expanduser("~/.copilot"))
+        self.assertFalse(Path(env["COPILOT_HOME"]).exists(), "scratch COPILOT_HOME is removed afterwards")
+
+    def test_fenced_json_is_accepted(self):
+        out = "```json\n" + json.dumps(GOOD_VERIFY) + "\n```"
+        res = workers.run_copilot("p", VERIFIER, "/tmp", runner=lambda a, s, c, t, e: done(a, copilot_stdout(out)))
+        self.assertEqual(res["output"], GOOD_VERIFY)
+
+    def test_prose_twice_is_worker_error(self):
+        calls = []
+
+        def runner(argv, stdin, cwd, timeout, env):
+            calls.append(stdin)
+            return done(argv, copilot_stdout("Looks fine to me."))
+
+        with self.assertRaises(workers.WorkerError):
+            workers.run_copilot("p", VERIFIER, "/tmp", runner=runner)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("not JSON", calls[1])

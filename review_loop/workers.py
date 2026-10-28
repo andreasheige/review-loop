@@ -255,6 +255,57 @@ def run_codex(prompt: str, schema: dict, cwd: str, model: str | None = None, run
         return with_retry(prompt, schema, once, check)
 
 
+COPILOT_MODEL = "gpt-6.1-sol"
+# read-only: no shell, no write, no URL fetch; Copilot's own path check keeps view/grep/glob inside cwd
+COPILOT_ARGS = ["--output-format", "json", "--allow-all-tools", "--available-tools", "view", "grep", "glob",
+                "--disable-builtin-mcps", "--disallow-temp-dir", "-s"]
+
+
+def parse_copilot(stdout: str) -> tuple:
+    """(output or None, usage, error or None) from `copilot --output-format json` JSONL: the last non-empty
+    assistant message, which must be one JSON object (a ```json fence around it is tolerated)."""
+    text, used = None, {}
+    for line in stdout.splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        d = ev.get("data") if isinstance(ev, dict) and isinstance(ev.get("data"), dict) else {}
+        if ev.get("type") == "assistant.message" and d.get("content"):
+            text = d["content"]
+        elif ev.get("type") == "session.usage_checkpoint":
+            used = {k: d[k] for k in ("totalPremiumRequests", "totalNanoAiu") if isinstance(d.get(k), int)}
+    if text is None:
+        return None, used, "no assistant message"
+    m = re.fullmatch(r"\s*```(?:json)?\s*(.*?)\s*```\s*", text, re.S)
+    try:
+        return json.loads(m.group(1) if m else text), used, None
+    except json.JSONDecodeError:
+        return None, used, "assistant message is not JSON: " + text[-300:]
+
+
+def run_copilot(prompt: str, schema: dict, cwd: str, model: str | None = None, runner: Runner = default_runner,
+                check=None) -> dict:
+    # Copilot has no schema flag: the schema goes into the prompt and with_retry validates the answer
+    bare = {k: v for k, v in schema.items() if k != "$schema"}
+    tail = (f"\n\n<output_schema>\n{json.dumps(bare)}\n</output_schema>\n"
+            "Reply with exactly one JSON object that matches this schema: no prose, no code fence.\n")
+    with launcher.copilot_home() as home:
+        argv = ["copilot", "--model", model or COPILOT_MODEL, *COPILOT_ARGS]
+
+        def once(text):
+            try:
+                p = runner(argv, text + tail, cwd, TIMEOUT, launcher.worker_env({"COPILOT_HOME": home}))
+            except subprocess.TimeoutExpired:
+                return None, {}, "timeout"
+            output, used, error = parse_copilot(p.stdout)
+            if error and p.returncode:
+                error = f"exit {p.returncode}: {error}; stderr: {p.stderr[-300:]}"
+            return output, used, error
+
+        return with_retry(prompt, schema, once, check)
+
+
 # ------------------------------------------------------------------ CLI
 
 
@@ -267,7 +318,7 @@ class Parser(argparse.ArgumentParser):
 
 def main(argv: list[str], runner: Runner = default_runner) -> int:
     ap = Parser(prog="review-loop worker", description=__doc__.splitlines()[0])
-    ap.add_argument("--harness", choices=("claude", "codex"), required=True)
+    ap.add_argument("--harness", choices=("claude", "codex", "copilot"), required=True)
     ap.add_argument("--role", choices=tuple(ROLES), required=True)
     ap.add_argument("--model")
     ap.add_argument("--input", required=True, help="the rendered prompt")
@@ -280,6 +331,8 @@ def main(argv: list[str], runner: Runner = default_runner) -> int:
         with launcher.scratch_worktree(args.repo, args.rev) as wt:
             if args.harness == "claude":
                 out = run_claude(prompt, schema, wt, args.model or "sonnet", runner)
+            elif args.harness == "copilot":
+                out = run_copilot(prompt, schema, wt, args.model, runner)
             else:
                 out = run_codex(prompt, schema, wt, args.model, runner)
     except (WorkerError, GitError, OSError) as e:
