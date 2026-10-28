@@ -24,7 +24,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import eot, normalise, scan, workers
+from . import eot, normalise, scan, secret_scan, workers
 from .gitdiff import GitError, git, verify_commit
 
 MAX_ROUND = 3
@@ -146,7 +146,9 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
         record["findings"] = list(sc["findings"])
         if sc.get("error"):
             raise eot.EotError(f"scan: {sc['error']}")
-        if any(f["rule_class"] == "secret" and f["introduced_by"] == "diff" for f in sc["findings"]):
+        if text.strip():  # the ticket/intent/commit text goes into the finder prompt too, so it gets D1 as well
+            record["findings"] += secret_scan.scan_text(text, f"<{source}>")
+        if any(f["rule_class"] == "secret" and f["introduced_by"] == "diff" for f in record["findings"]):
             raise eot.StopReview
         kept = [c for c in eot.changes(repo, since, head) if not eot.skipped(c[1])
                 and (c[1] in ticket_paths or c[2] in ticket_paths)]

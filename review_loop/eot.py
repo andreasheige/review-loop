@@ -3,7 +3,7 @@
 usage: review-loop eot [--base REF] [--rev REV] [--ticket PATH | --intent TEXT] [--author-family claude|gpt|unknown]
                        [--finder HARNESS[:MODEL]]... [--verifier HARNESS[:MODEL]]... [--format json|text]
 
-Order: eligibility (by file class only) → scan → any scan error or D1 (secret) hit stops before a model sees the
+Order: eligibility (by file class only) → scan (the diff, and the ticket/intent/commit text via `gitleaks stdin`) → any scan error or D1 (secret) hit stops before a model sees the
 diff → finder(s) → verifier(s) on correctness/security findings with a failure scenario → status in code → record
 at $(git rev-parse --git-common-dir)/review-loop/<patch-id>/round-1/. Exit 0 pass, 1 block, 2 needs_human, 3 error.
 
@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from . import deps, launcher, normalise, scan, workers
+from . import deps, launcher, normalise, scan, secret_scan, workers
 from .gitdiff import GitError, git, verify_commit
 
 FAMILY = {"claude": "claude", "codex": "gpt", "copilot": "gpt"}  # copilot runs a GPT model
@@ -209,7 +209,9 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
         record["findings"] = list(sc["findings"])
         if sc.get("error"):
             raise EotError(f"scan: {sc['error']}")
-        if any(f["rule_class"] == "secret" and f["introduced_by"] == "diff" for f in sc["findings"]):
+        if text.strip():  # the ticket/intent/commit text goes into the finder prompt too, so it gets D1 as well
+            record["findings"] += secret_scan.scan_text(text, f"<{source}>")
+        if any(f["rule_class"] == "secret" and f["introduced_by"] == "diff" for f in record["findings"]):
             raise StopReview  # D1, any confidence: the diff may hold a secret, so no model may see it
         if diff_paths:
             record["findings"] += review(repo, base, head, text, eligible, deleted, diff_paths, finders, verifiers,

@@ -84,21 +84,52 @@ class Gitleaks:
             os.rmdir(self.ignore_dir)
         if self.proc.returncode != 0:
             raise ToolError(f"gitleaks exited {self.proc.returncode}")
-        try:
-            hits = json.loads(out)
-            assert isinstance(hits, list)
-        except (ValueError, AssertionError):
-            raise ToolError("gitleaks output is not a JSON list")
-        findings = []
-        for h in hits:
-            rule, path = h["RuleID"], h["File"]
-            secret = "".join((h.get("Secret") or h.get("Match") or "").split())
-            k = hmac.new(self.key, secret.encode(), hashlib.sha256).hexdigest()
-            generic = is_generic(rule)
-            findings.append(finding(
-                tool="gitleaks", rule=rule, path=path, k=k, lines=(h["StartLine"], h["EndLine"]),
-                status="needs_human" if generic else "hard", rule_class="secret", surface="secret",
-                title=f"{'Possible secret' if generic else 'Secret'} ({rule}) added in {path}",
-                reasoning=rule, ref=f"gitleaks@{self.version}:{rule}",
-            ))
-        return findings
+        return to_findings(out, self.key, self.version)
+
+
+def to_findings(out: bytes, key: bytes, version: str, path: str | None = None) -> list[dict]:
+    """gitleaks JSON report → findings; the secret only goes into the HMAC. path overrides the reported file."""
+    try:
+        hits = json.loads(out)
+        assert isinstance(hits, list)
+    except (ValueError, AssertionError):
+        raise ToolError("gitleaks output is not a JSON list")
+    findings = []
+    for h in hits:
+        rule, where = h["RuleID"], path or h["File"]
+        secret = "".join((h.get("Secret") or h.get("Match") or "").split())
+        k = hmac.new(key, secret.encode(), hashlib.sha256).hexdigest()
+        generic = is_generic(rule)
+        findings.append(finding(
+            tool="gitleaks", rule=rule, path=where, k=k, lines=(h["StartLine"], h["EndLine"]),
+            status="needs_human" if generic else "hard", rule_class="secret", surface="secret",
+            title=f"{'Possible secret' if generic else 'Secret'} ({rule}) added in {where}",
+            reasoning=rule, ref=f"gitleaks@{version}:{rule}",
+        ))
+    return findings
+
+
+def scan_text(text: str, label: str) -> list[dict]:
+    """D1 on text that is not in the diff (ticket, --intent, commit messages), via `gitleaks stdin` with the same
+    pinned binary and rules. label names the source in the finding's path; the text is never stored."""
+    exe, version = resolve("gitleaks")
+    fd, config = tempfile.mkstemp(prefix="review-loop-gitleaks-", suffix=".toml")
+    with os.fdopen(fd, "w") as f:
+        f.write(CONFIG)
+    ignore_dir = tempfile.mkdtemp(prefix="review-loop-gl-ignore-")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GITLEAKS_")}
+    env["PATH"] = SAFE_PATH
+    try:
+        p = subprocess.run([exe, "stdin", "--no-banner", "--log-level", "error", "--config", config,
+                            "--report-format", "json", "--report-path", "-", "--exit-code", "0",
+                            "--ignore-gitleaks-allow", "--gitleaks-ignore-path", ignore_dir],
+                           input=text.encode("utf-8", "replace"), capture_output=True, env=env, cwd=ignore_dir,
+                           timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise ToolError("gitleaks timed out")
+    finally:
+        os.unlink(config)
+        os.rmdir(ignore_dir)
+    if p.returncode != 0:
+        raise ToolError(f"gitleaks exited {p.returncode}")
+    return to_findings(p.stdout, hmac_key(), version, path=label)
