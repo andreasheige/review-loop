@@ -217,6 +217,11 @@ class EotTest(RepoCase):
                     self.assertEqual(list(Path(out["record_path"]).parent.joinpath("prompts").iterdir()), [])
                     self.assertNotIn(value.split('"')[-2] if code == 2 else value, json.dumps(out))
 
+    def test_branch_created_reads_a_utc_reflog(self):
+        env = {**os.environ, "TZ": "UTC"}
+        subprocess.run(["git", "switch", "-q", "-c", "utc-branch"], cwd=self.repo, env=env, check=True)
+        self.assertTrue(eot.branch_created(str(self.repo), "utc-branch").endswith("+00:00"))
+
     # security lens (plan 6.1)
     def test_scanner_hits_reach_the_finder_as_hints(self):
         self.write("src/calc.py", "def add(a, b):\n    return a + b  # \u202e\n")
