@@ -239,6 +239,13 @@ class Codex(unittest.TestCase):
         self.assertNotIn("-m", fake.calls[0][0])
         self.assertIn("JSONDecodeError", fake.calls[1][1])
 
+    def test_loose_cwe_is_normalised_not_a_failed_round(self):
+        found = {"findings": [{**GOOD_FIND["findings"][0], "cwe": c} for c in ("CWE 79", "cwe-89", "352", "n/a")]}
+        fake = FakeRunner(codex_writes(json.dumps({**GOOD_FIND, **found})))
+        r = workers.run_codex("PROMPT", FINDER, "/tmp", None, fake)
+        self.assertEqual(r["attempts"], 1)
+        self.assertEqual([f["cwe"] for f in r["output"]["findings"]], ["CWE-79", "CWE-89", "CWE-352", None])
+
     def test_spend_cap_raises_after_retry(self):
         fake = FakeRunner(codex_writes(None, 1), codex_writes(None, 1))
         with self.assertRaisesRegex(workers.WorkerError, "spend cap"):
