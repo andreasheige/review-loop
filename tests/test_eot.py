@@ -217,6 +217,44 @@ class EotTest(RepoCase):
                     self.assertEqual(list(Path(out["record_path"]).parent.joinpath("prompts").iterdir()), [])
                     self.assertNotIn(value.split('"')[-2] if code == 2 else value, json.dumps(out))
 
+    # security lens (plan 6.1)
+    def test_scanner_hits_reach_the_finder_as_hints(self):
+        self.write("src/calc.py", "def add(a, b):\n    return a + b  # \u202e\n")
+        self.commit("feat: add")
+        fake = FakeClaude({"findings": [], "reviewed_paths": ["src/calc.py"]})
+        self.eot(fake)
+        [prompt] = fake.prompts
+        self.assertIn("Deterministic scanner hits on this change", prompt)
+        self.assertRegex(prompt, r"\[unicode\] src/calc\.py:2: ")
+        self.assertNotIn("\u202e", prompt.split("Deterministic scanner hits", 1)[1].split("</task>", 1)[0])
+
+    def test_security_path_adds_a_security_only_finder(self):
+        self.write("src/auth/session.py", "def ok(user):\n    return True\n")
+        self.commit("feat: session check")
+        fake = FakeClaude({"findings": [], "reviewed_paths": ["src/auth/session.py"]})
+        code, out = self.eot(fake)
+        self.assertEqual(sorted(w["role"] for w in out["workers"]), ["finder", "security-finder"])
+        lenses = sorted(p.split("Lenses to apply: ", 1)[1].split("\n", 1)[0] for p in fake.prompts)
+        self.assertEqual(lenses, ["correctness, security, scope, simplify, conformance, seam", "security"])
+
+    def test_ordinary_path_runs_one_finder(self):
+        self.write("src/calc.py", "def add(a, b):\n    return a - b\n")
+        self.commit("feat: add")
+        fake = FakeClaude({"findings": [], "reviewed_paths": ["src/calc.py"]})
+        code, out = self.eot(fake)
+        self.assertEqual([w["role"] for w in out["workers"]], ["finder"])
+
+    def test_personal_data_line_only_in_sensitive_repos(self):
+        self.write("src/calc.py", "def add(a, b):\n    return a - b\n")
+        self.commit("feat: add")
+        fake = FakeClaude({"findings": [], "reviewed_paths": ["src/calc.py"]})
+        self.eot(fake)
+        self.assertNotIn("Personal data", fake.prompts[0])
+        self.git("config", "review-loop.sensitive", "true")
+        fake = FakeClaude({"findings": [], "reviewed_paths": ["src/calc.py"]})
+        self.eot(fake)
+        self.assertIn("Personal data (this repository handles real users' data)", fake.prompts[0])
+
     def test_generic_secret_also_stops_before_any_model(self):
         v = entropy_value()
         self.write("src/config.ts", f'const api_key = "{v}";\n')

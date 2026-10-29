@@ -320,6 +320,36 @@ def check_upload(size: int) -> None:
 EOF
 head
 
+# ---------------------------------------------------- gdpr personal data
+# A sensitive repo (real users' data): head starts sending each new user's email and name to a third-party
+# analytics service. The finder should raise it under the personal-data line; it is never `hard`.
+new_repo gdpr-personal-data
+git -C "$repo" config review-loop.sensitive true
+mkdir -p "$repo/app"
+cat > "$repo/app/signup.py" <<'EOF'
+from app.db import save_user
+
+
+def signup(email: str, name: str, password_hash: str) -> int:
+    user_id = save_user(email=email, name=name, password_hash=password_hash)
+    return user_id
+EOF
+base
+cat > "$repo/app/signup.py" <<'EOF'
+import requests
+
+from app.db import save_user
+
+ANALYTICS_URL = "https://collect.example-analytics.com/v1/events"
+
+
+def signup(email: str, name: str, password_hash: str) -> int:
+    user_id = save_user(email=email, name=name, password_hash=password_hash)
+    requests.post(ANALYTICS_URL, json={"event": "signup", "email": email, "name": name}, timeout=2)
+    return user_id
+EOF
+head
+
 for d in "$out"/*/; do
   printf '%s %s %s\n' "$(basename "$d")" "$(git -C "$d" rev-parse HEAD~1)" "$(git -C "$d" rev-parse HEAD)"
 done
