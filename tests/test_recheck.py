@@ -166,6 +166,19 @@ class RecheckTest(RepoCase):
         code, out = self.recheck(FakeClaude(both))
         self.assertEqual(code, 1, "the accept expired, so the hidden Unicode blocks again")
 
+    def test_lapsed_accept_reopens_a_model_finding(self):
+        first = self.blocked_eot()
+        bug = next(f for f in first["findings"] if f["title"] == BUG["title"])
+        store = accept.store(str(self.repo))
+        store.write_text(json.dumps({"finding_id": bug["id"], "rule_class": "review", "reason": "known, fixed later",
+                                     "expires": None, "tty": True}) + "\n")
+        self.assertEqual(self.eot(FakeClaude({"findings": [BUG, NIT], "reviewed_paths": ["src/calc.py"]}))[0], 0)
+        store.write_text("")
+        fake = FakeClaude(CLEAN, "confirmed")
+        code, out = self.recheck(fake)
+        self.assertEqual(code, 1, "the accept is gone, so the bug is open again and verified again")
+        self.assertTrue(any("Finding id: " + bug["id"] in p for p in fake.prompts))
+
     def test_verifier_sees_the_whole_ticket_diff(self):
         self.blocked_eot()
         self.write("src/other.py", "z = 3\n")
