@@ -91,6 +91,36 @@ class UiTest(unittest.TestCase):
         self.assertEqual((r["status"], r["outcome"]["exit_code"]), ("not_applicable", 0))
 
 
+def side(entries):
+    """{(story, viewport, scheme): runner entry} from (story, vp, scheme, [axe ids on .x], error)."""
+    return {(st, vp, sc): {"story": st, "viewport": vp, "scheme": sc, "trap": None, "shot": None, "error": err,
+                           "violations": [{"id": i, "impact": "serious", "help": i, "targets": [".x"]} for i in ids]}
+            for st, vp, sc, ids, err in entries}
+
+
+class CompareTest(unittest.TestCase):
+    """compare() and coverage without a browser (fresh-context review findings)."""
+
+    def test_new_in_one_scheme_blocks_even_if_old_in_another(self):
+        base = side([("s", "desktop", "dark", ["color-contrast"], None), ("s", "desktop", "light", [], None)])
+        head = side([("s", "desktop", "dark", ["color-contrast"], None), ("s", "desktop", "light", ["color-contrast"], None)])
+        [f] = ui.compare(base, head)
+        self.assertEqual(f["status"], "hard")
+        self.assertIn("desktop/light", f["title"])
+
+    def test_base_that_did_not_load_never_turns_old_violations_into_hard(self):
+        base = side([("s", "mobile", "light", [], "timeout")])
+        head = side([("s", "mobile", "light", ["color-contrast"], None)])
+        [f] = ui.compare(base, head)
+        self.assertEqual(f["status"], "needs_human")
+
+    def test_no_nearby_story_is_needs_human_not_a_pass(self):
+        f = ui.coverage_finding(["src/hooks/useX.tsx"], 0, 0)
+        self.assertEqual((f["status"], f["rule_class"]), ("needs_human", "a11y"))
+        self.assertIsNone(ui.coverage_finding(["src/Button.tsx"], 3, 3))
+        self.assertEqual(ui.coverage_finding(["a.tsx"], ui.MAX_STORIES, ui.MAX_STORIES + 5)["status"], "needs_human")
+
+
 class OptInTest(unittest.TestCase):
     """No Playwright in the repo: the opt-in prompt (plan 7.4). Needs no Node."""
 

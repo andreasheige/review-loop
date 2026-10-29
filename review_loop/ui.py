@@ -15,7 +15,8 @@ lacks, so an agent can't answer): yes (prints the install command; review-loop i
 remote URL; `sweep --digest` shows them, "never" included. Until then the run is skipped with exit 0.
 
 Compared with base: a new serious or critical axe violation, or a new keyboard trap -> hard (a11y); a new
-minor or moderate one -> needs_human; a story whose screenshot changed -> needs_human (ui-visual: maybe
+minor or moderate one -> needs_human; where base didn't load, needs_human; no nearby story, or more than
+MAX_STORIES -> needs_human (ui-coverage), never a silent pass; a story whose screenshot changed -> needs_human (ui-visual: maybe
 intended, a human looks); anything already on base -> advisory, pre-existing (backlog). The result goes to
 <git-common-dir>/review-loop/<patch-id>/ui.json for the push gate (plan 7.5). Exit 0 pass, 1 block,
 2 needs_human, 3 error.
@@ -39,7 +40,8 @@ from .secret_scan import state_dir
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "ui" / "runner.mjs"
-UI_FILE = re.compile(r"\.(tsx|jsx|vue|svelte|css|scss|sass|less|html|mdx)$|(^|/)\.storybook/", re.I)
+UI_FILE = re.compile(r"\.(tsx|jsx|vue|svelte|css|scss|sass|less|html|mdx)$|\.stories\.[cm]?[jt]s$|\.css\.[jt]s$|"
+                     r"(^|/)\.storybook/", re.I)
 VIEWPORTS = [{"name": "mobile", "width": 390, "height": 844}, {"name": "desktop", "width": 1280, "height": 800}]
 SCHEMES = ["light", "dark"]
 MAX_STORIES = 30
@@ -153,15 +155,20 @@ def stories(site: Path) -> dict[str, str]:
     return {e["id"]: e.get("importPath", "") for e in index.get("entries", {}).values() if e.get("type") == "story"}
 
 
-def pick(head_stories: dict[str, str], changed: list[str]) -> list[str]:
+def nearby(head_stories: dict[str, str], changed: list[str]) -> list[str]:
     """Stories next to a changed file (same directory, or the story file itself); a change to .storybook/ or a
-    stylesheet outside any component directory picks the first stories of the index instead."""
+    stylesheet or mdx outside any component directory means every story."""
     dirs = {str(Path(p).parent) for p in changed}
     near = [sid for sid, imp in head_stories.items()
             if str(Path(imp.removeprefix("./")).parent) in dirs or imp.removeprefix("./") in changed]
-    if not near and any(p.startswith(".storybook/") or p.endswith((".css", ".scss")) for p in changed):
+    if not near and any(p.startswith(".storybook/") or p.endswith((".css", ".scss", ".sass", ".less", ".mdx"))
+                        for p in changed):
         near = list(head_stories)
-    return near[:MAX_STORIES]
+    return near
+
+
+def pick(head_stories: dict[str, str], changed: list[str]) -> list[str]:
+    return nearby(head_stories, changed)[:MAX_STORIES]
 
 
 def run_side(nm: Path, site: Path, ids: list[str], work: Path, side: str) -> dict:
@@ -184,7 +191,10 @@ def ui_finding(rule, rule_class, story, where, k, status, title, introduced=True
 
 
 def compare(base: dict, head: dict) -> list[dict]:
-    out, changed_looks = [], {}
+    """One finding per (story, rule, target) across viewports and schemes: new if it is new in any variant (with the
+    variants listed), pre-existing only if base had it wherever head has it. A variant whose base didn't load can't
+    show what is new, so its head violations go to a human instead of blocking."""
+    out, changed_looks, axe = [], {}, {}
     for key, h in sorted(head.items()):
         story, vp, scheme = key
         where = f"{vp}/{scheme}"
@@ -193,26 +203,46 @@ def compare(base: dict, head: dict) -> list[dict]:
             out.append(ui_finding("ui-error", "a11y", story, where, normalise.sha1(f"{key}"), "needs_human",
                                   f"Story {story} did not load at {where}: {h['error'][:80]}"))
             continue
+        base_broken = bool(b and b.get("error"))
         before = {(v["id"], t) for v in (b or {}).get("violations", []) for t in v["targets"]}
         for v in h["violations"]:
             for t in v["targets"]:
-                k = normalise.sha1(f"{story}|{v['id']}|{t}")
-                if (v["id"], t) in before:
-                    out.append(ui_finding(f"axe-{v['id']}", "a11y", story, where, k, "advisory",
-                                          f"{v['help']} ({v['id']}, {t}) — already on base", introduced=False))
-                else:
-                    status = "hard" if v["impact"] in BLOCKING_IMPACT else "needs_human"
-                    out.append(ui_finding(f"axe-{v['id']}", "a11y", story, where, k, status,
-                                          f"{v['help']} ({v['id']}, {v['impact']}, {t}) at {where}"))
+                a = axe.setdefault((story, v["id"], t), {"help": v["help"], "impact": v["impact"], "new": [],
+                                                         "old": [], "unknown": []})
+                bucket = "unknown" if base_broken else "old" if (v["id"], t) in before else "new"
+                a[bucket].append(where)
         if h["trap"] and not (b and b.get("trap")):
-            out.append(ui_finding("keyboard-trap", "a11y", story, where, normalise.sha1(f"{story}|trap|{h['trap']}"),
-                                  "hard", f"Keyboard trap on {h['trap']} at {where}: Tab can't leave it"))
+            status = "needs_human" if base_broken else "hard"
+            out.append(ui_finding("keyboard-trap", "a11y", story, where, normalise.sha1(f"{story}|trap|{h['trap']}|{where}"),
+                                  status, f"Keyboard trap on {h['trap']} at {where}: Tab can't leave it"))
         if b and b.get("shot") and h.get("shot") and Path(b["shot"]).read_bytes() != Path(h["shot"]).read_bytes():
             changed_looks.setdefault(story, []).append(where)
+    for (story, rule, target), a in sorted(axe.items()):
+        k = normalise.sha1(f"{story}|{rule}|{target}")
+        if a["new"]:
+            status = "hard" if a["impact"] in BLOCKING_IMPACT else "needs_human"
+            out.append(ui_finding(f"axe-{rule}", "a11y", story, ", ".join(a["new"]), k, status,
+                                  f"{a['help']} ({rule}, {a['impact']}, {target}) — new at {', '.join(a['new'])}"))
+        elif a["unknown"]:
+            out.append(ui_finding(f"axe-{rule}", "a11y", story, ", ".join(a["unknown"]), k, "needs_human",
+                                  f"{a['help']} ({rule}, {a['impact']}, {target}) — base could not be checked"))
+        else:
+            out.append(ui_finding(f"axe-{rule}", "a11y", story, ", ".join(a["old"]), k, "advisory",
+                                  f"{a['help']} ({rule}, {target}) — already on base", introduced=False))
     for story, wheres in sorted(changed_looks.items()):  # one finding per story, not per viewport and scheme
         out.append(ui_finding("visual-change", "ui-visual", story, ", ".join(wheres), normalise.sha1(f"{story}|shot"),
                               "needs_human", f"Story {story} looks different ({', '.join(wheres)}): intended?"))
     return normalise.merge(out)
+
+
+def coverage_finding(changed: list[str], picked: int, available: int) -> dict | None:
+    """UI files changed but no story (or not every nearby story) was looked at: a human decides, never a pass."""
+    if picked and available <= MAX_STORIES:
+        return None
+    why = (f"no story is next to the changed UI files ({', '.join(changed[:3])}{', …' if len(changed) > 3 else ''})"
+           if not picked else f"only the first {MAX_STORIES} of {available} nearby stories were checked")
+    return ui_finding("ui-coverage", "a11y", "-", "-", normalise.sha1("|".join(changed)), "needs_human",
+                      f"UI change not fully checked: {why}")
 
 
 def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | None = None, ask=None) -> dict:
@@ -237,14 +267,19 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | N
             work = Path(tmp)
             if static:
                 sites = (Path(static[0]), Path(static[1]))
+                result["static"] = True  # a test hook: the gate never counts a static result
             else:
                 sites = (build_storybook(repo, base, nm, work, "base"), build_storybook(repo, head, nm, work, "head"))
-            ids = pick(stories(sites[1]), changed)
+            near = nearby(stories(sites[1]), changed)
+            ids = near[:MAX_STORIES]
             result["stories"] = ids
             base_ids = [i for i in ids if i in stories(sites[0])]
             before = run_side(nm, sites[0], base_ids, work, "base") if base_ids else {}
             after = run_side(nm, sites[1], ids, work, "head")
             result["findings"] = compare(before, after)
+            gap = coverage_finding(changed, len(ids), len(near))
+            if gap:
+                result["findings"].append(gap)
     except (UiError, OSError, ValueError, subprocess.TimeoutExpired, gitdiff.GitError) as e:
         error = str(e)
     code, summary = normalise.outcome(result["findings"], [error] if error else [])
