@@ -37,6 +37,7 @@ from pathlib import Path
 
 from . import eot, gitdiff, normalise
 from .secret_scan import state_dir
+from .tools import write_safely
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "ui" / "runner.mjs"
@@ -289,7 +290,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | N
         pid = eot.patch_id(repo, base, head)
         common = Path(repo, gitdiff.git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
         (common / "review-loop" / pid).mkdir(parents=True, exist_ok=True)
-        (common / "review-loop" / pid / "ui.json").write_text(json.dumps(result, indent=2) + "\n")
+        write_safely(common / "review-loop" / pid / "ui.json", json.dumps(result, indent=2) + "\n", common)
     except (eot.EotError, OSError):
         pass
     return result

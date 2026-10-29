@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+from .tools import write_safely
 from . import accept, deps, launcher, normalise, scan, secret_scan, workers
 from .gitdiff import GitError, git, verify_commit
 
@@ -342,8 +343,17 @@ def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verif
 
         finder_jobs = [(s, "finder", prompt) for s in finders] + [(s, "security-finder", security_prompt)
                                                                    for s in finders if security_prompt]
-        runs = list(pool.map(lambda j: run_worker(j[0], j[1], j[2], find_schema, wt, runner, coverage),
-                             finder_jobs if eligible or deleted else []))
+        def finder_run(job):
+            spec, role, text = job
+            if role != "security-finder":
+                return run_worker(spec, role, text, find_schema, wt, runner, coverage)
+            try:  # on trial: a failure is recorded, never a round error
+                return run_worker(spec, role, text, find_schema, wt, runner, coverage)
+            except workers.WorkerError as e:
+                return {"findings": []}, {"role": role, "family": FAMILY[spec[0]], "harness": spec[0],
+                                          "model": spec[1] or "default", "error": str(e)[:300]}
+
+        runs = list(pool.map(finder_run, finder_jobs if eligible or deleted else []))
         found: dict[str, dict] = {}
         for output, entry in runs:
             record["workers"].append(entry)
@@ -406,9 +416,8 @@ def write_prompt(path: Path, text: str) -> None:
 
 
 def write(path: Path, record: dict) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(json.dumps(record, indent=2) + "\n")
+    """<common>/review-loop/<pid>/round-<n>/record.json, never through a planted symlink."""
+    write_safely(path, json.dumps(record, indent=2) + "\n", path.parents[3])
 
 
 # ------------------------------------------------------------------ CLI

@@ -13,7 +13,8 @@ Checks, each recorded with its own status (ok, findings, skipped, error):
              repo-local core.hooksPath (it turns the global hooks off for that repo)
   image      repos with a Dockerfile: the newest `trivy-report` artifact of the repo's CI (Azure DevOps via `az`,
              GitHub via `gh api`), its vulnerabilities minus those osv already lists for the same (package, id);
-             an empty or unreadable report is an error (a scan that writes nothing passes silently otherwise);
+             default-branch runs only; an empty, unreadable or non-Trivy report is an error (a scan that writes
+             nothing passes silently otherwise);
              no Dockerfile -> not_applicable
   sast       skipped until there are own Semgrep rules (Decision 7)
   machine    at most once per 7 days: the global core.hooksPath still points at the global hooks dir
@@ -32,13 +33,14 @@ import subprocess
 import sys
 import re
 import tempfile
+import urllib.parse
 import time
 import zipfile
 from pathlib import Path
 
 from . import deps, gitdiff
 from .secret_scan import Gitleaks, state_dir
-from .tools import SAFE_PATH, ToolError, resolve
+from .tools import SAFE_PATH, ToolError, resolve, write_safely
 
 DUE_DAYS = 7
 LOCK_STALE_S = 3600
@@ -134,6 +136,8 @@ SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "dist", "build"}
 ADO = re.compile(r"(?:dev\.azure\.com/([^/]+)/([^/]+)/_git/([^/?#]+)|ssh\.dev\.azure\.com:v3/([^/]+)/([^/]+)/([^/?#]+))")
 GITHUB = re.compile(r"github\.com[:/]([^/]+)/([^/.]+?)(?:\.git)?$")
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"  # Azure DevOps, for `az rest`
+ADO_HOSTS = re.compile(r"^(dev\.azure\.com|([a-z0-9-]+\.)+visualstudio\.com)$")
+MAX_REPORT = 50 * 1024 * 1024
 
 
 def dockerfiles(repo: str) -> list[str]:
@@ -153,6 +157,8 @@ def parse_trivy(raw: bytes, osv_vulns: list[dict]) -> dict:
         report = json.loads(raw)
     except ValueError:
         return {"status": "error", "error": "trivy-report is not JSON"}
+    if not isinstance(report, dict) or "SchemaVersion" not in report or "ArtifactName" not in report:
+        return {"status": "error", "error": "trivy-report is not a Trivy JSON report (no SchemaVersion/ArtifactName)"}
     known = {(v["package"], i) for v in osv_vulns for i in v["ids"] + v.get("aliases", [])}
     vulns, deduped = [], 0
     for res in report.get("Results") or []:
@@ -176,14 +182,17 @@ def az(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
 def fetch_ado(org: str, project: str, name: str) -> tuple[bytes | None, str]:
     """(newest trivy-report.json of the repo's pipelines, run label) via az; az attaches the token itself."""
     base = ["--detect", "false", "--org", f"https://dev.azure.com/{org}", "--project", project]
+    d = az("repos", "show", *base, "--repository", name, "--query", "defaultBranch", "-o", "tsv")
+    default = d.stdout.decode().strip() or "refs/heads/main"
     p = az("pipelines", "list", *base, "--query", "[].id", "-o", "json")
     runs = []
     for pid in json.loads(p.stdout or b"[]") if p.returncode == 0 else []:
         show = az("pipelines", "show", *base, "--id", str(pid), "--query", "repository.name", "-o", "tsv")
         if show.stdout.decode().strip() != name:
             continue
-        r = az("pipelines", "runs", "list", *base, "--pipeline-ids", str(pid), "--top", "5", "--query",
-               "[?result=='succeeded'].{id:id, finish:finishTime}", "-o", "json")
+        # the default branch only: a PR run can publish a trivy-report of its own making
+        r = az("pipelines", "runs", "list", *base, "--pipeline-ids", str(pid), "--branch", default, "--top", "5",
+               "--query", "[?result=='succeeded'].{id:id, finish:finishTime}", "-o", "json")
         runs += json.loads(r.stdout or b"[]") if r.returncode == 0 else []
     for run in sorted(runs, key=lambda r: r["finish"] or "", reverse=True):
         a = az("pipelines", "runs", "artifact", "list", *base, "--run-id", str(run["id"]), "--query",
@@ -191,6 +200,8 @@ def fetch_ado(org: str, project: str, name: str) -> tuple[bytes | None, str]:
         url = a.stdout.decode().strip()
         if not url or a.returncode:
             continue
+        if not ADO_HOSTS.match(urllib.parse.urlparse(url).hostname or ""):
+            raise ToolError("trivy-report download URL is not an Azure DevOps host; not sending a token there")
         with tempfile.TemporaryDirectory(prefix="review-loop-trivy-") as tmp:
             z = Path(tmp, "a.zip")
             d = az("rest", "--method", "get", "--url", url, "--resource", ADO_RESOURCE, "--output-file", str(z), timeout=120)
@@ -201,8 +212,14 @@ def fetch_ado(org: str, project: str, name: str) -> tuple[bytes | None, str]:
 
 
 def fetch_github(owner: str, name: str) -> tuple[bytes | None, str]:
-    p = run_tool(["gh", "api", f"repos/{owner}/{name}/actions/artifacts?name=trivy-report&per_page=5"], os.getcwd())
-    arts = [a for a in (json.loads(p.stdout or b"{}").get("artifacts") or []) if not a.get("expired")] if p.returncode == 0 else []
+    info = run_tool(["gh", "api", f"repos/{owner}/{name}"], os.getcwd())
+    default = json.loads(info.stdout or b"{}").get("default_branch", "main") if info.returncode == 0 else "main"
+    p = run_tool(["gh", "api", f"repos/{owner}/{name}/actions/artifacts?name=trivy-report&per_page=20"], os.getcwd())
+    # default-branch runs of this repo only: a PR (or a fork's run) could upload a report of its own making
+    arts = [a for a in (json.loads(p.stdout or b"{}").get("artifacts") or []) if not a.get("expired")
+            and (a.get("workflow_run") or {}).get("head_branch") == default
+            and (a.get("workflow_run") or {}).get("head_repository_id") == (a.get("workflow_run") or {}).get("repository_id")
+            ] if p.returncode == 0 else []
     if not arts:
         return None, "no trivy-report artifact"
     newest = max(arts, key=lambda a: a["created_at"])
@@ -218,6 +235,8 @@ def fetch_github(owner: str, name: str) -> tuple[bytes | None, str]:
 def report_from_zip(z: Path) -> bytes:
     with zipfile.ZipFile(z) as zf:
         names = [n for n in zf.namelist() if n.endswith(".json")]
+        if names and zf.getinfo(names[0]).file_size > MAX_REPORT:
+            raise ValueError("trivy-report is larger than 50 MB")
         return zf.read(names[0]) if names else b""
 
 
@@ -363,9 +382,7 @@ def sweep(repo: str) -> dict:
     result = {"schema_version": 1, "ts": now().isoformat(timespec="seconds"), "repo": Path(repo).name, "head": head,
               "checks": checks, "ms": round((time.monotonic() - start) * 1000)}
     (common / "review-loop").mkdir(parents=True, exist_ok=True)
-    tmp = common / "review-loop" / "sweep.json.tmp"
-    tmp.write_text(json.dumps(result, indent=2) + "\n")
-    os.replace(tmp, common / "review-loop" / "sweep.json")
+    write_safely(common / "review-loop" / "sweep.json", json.dumps(result, indent=2) + "\n", common)
     return result
 
 

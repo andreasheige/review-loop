@@ -38,7 +38,7 @@ CONFIG = (  # case-insensitive: claude.md loads as CLAUDE.md on APFS
     # UI checks' own goalposts (plan 7.2): accepting a new baseline or loosening axe makes a visual or a11y
     # regression pass, so a human looks at it.
     ("ui-baseline", re.compile(r"(^|/)__(image_)?snapshots__" + D + r"|\.snap$|(^|/)[^/]+-snapshots" + D +
-                               r"|(^|/)backstop(_data" + D + r"|\.json$)|(^|/)\.?axe(rc)?[^/]*\.(json|js|cjs|mjs|ts)$|"
+                               r"|(^|/)backstop(_data" + D + r"|\.json$)|(^|/)\.axerc(\.[a-z]+)?$|(^|/)\.?axe\.config\.([cm]?[jt]s|json)$|"
                                r"(^|/)\.pa11yci[^/]*$|(^|/)\.?lighthouserc[^/]*$|(^|/)\.storybook/test-runner[^/]*$|"
                                r"(^|/)chromatic\.config\.json$|(^|/)\.?percy\.ya?ml$|(^|/)\.?lostpixel[^/]*$", re.I)),
 )

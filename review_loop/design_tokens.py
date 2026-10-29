@@ -26,7 +26,9 @@ def scan(added: dict[str, dict[int, str]]) -> list[dict]:
         if not UI_FILE.search(path) or TOKEN_FILE.search(path):
             continue
         for line, text in lines.items():
-            m = COLOUR.search(text)
+            code = re.split(r"//|/\*|<!--", text, maxsplit=1)[0]  # an issue ref in a comment isn't a colour
+            code = re.sub(r"\b(href|to)=([\"'])#[^\"']*\2", "", code)  # nor an in-page anchor
+            m = COLOUR.search(code)
             if not m:
                 continue
             f = normalise.finding(tool="reviewloop", rule="design-token", path=path, k=normalise.sha1(text.strip()),

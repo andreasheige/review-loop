@@ -59,6 +59,7 @@ class PolicyTest(RepoCase):
 
     def test_ordinary_ui_code_is_not_a_baseline(self):
         self.write("src/components/Snapshot.tsx", "export const Snapshot = () => null;\n")
+        self.write("src/charts/axes.ts", "export const axes = [];\n")
         self.commit("feat: snapshot view")
         self.assertNotIn("ui-baseline", self.rules(self.scan()))
 
@@ -79,7 +80,7 @@ class PolicyTest(RepoCase):
             "src/styles/colors.ts": "export const red = '#ff0000';\n",
             "src/theme/base.css": ":root { --brand: #123456; }\n",
             "src/Entity.html": "<p>&#123; not a colour</p>\n",
-            "src/util.ts": "// see issue #123\n",
+            "src/Notes.tsx": "// fixes #123\nexport const L = () => <a href=\"#add\">x</a>;\n",
         })
         self.assertEqual(sorted(f["sites"][0]["path"] for f in found), ["src/Button.tsx", "src/Card.tsx", "src/app.css"])
         self.assertEqual({(f["status"], f["lens"]) for f in found}, {("advisory", "ui")})
