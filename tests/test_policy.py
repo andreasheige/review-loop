@@ -176,6 +176,21 @@ class PolicyTest(RepoCase):
         self.commit("chore: rewrite")
         self.assertEqual(self.scan()["exit_code"], 2)
 
+    def test_accepting_a_symlink_does_not_cover_a_new_target(self):
+        os.symlink("a", self.repo / "link")
+        self.git("add", "link")
+        self.commit("chore: link")
+        fid = self.rules(self.scan())["symlink"]["id"]
+        soon = (date.today() + timedelta(days=14)).isoformat()
+        self.assertEqual(self.accept(fid, "--rule-class", "control-weakening", "--reason", "points at our own dir",
+                                     "--expires", soon)[0], 0)
+        self.assertEqual(self.scan()["exit_code"], 0)
+        os.remove(self.repo / "link")
+        os.symlink(".claude", self.repo / "link")
+        self.git("add", "link")
+        self.commit("chore: repoint")
+        self.assertEqual(self.scan()["exit_code"], 2, "a new target needs a new accept")
+
     def test_malformed_accept_rows_are_ignored(self):
         store = accept.store(str(self.repo))
         store.parent.mkdir(parents=True, exist_ok=True)
