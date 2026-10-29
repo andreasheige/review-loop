@@ -382,14 +382,17 @@ def repos_under(roots: list[Path]):
 
 
 def digest(roots: list[Path]) -> str:
-    lines = ["repo\tlast sweep\tosv\tgitleaks\tworkflows\timage\thooks\terrors"]
+    from .ui import optins
+    answers = {k: v.get("answer") for k, v in optins().items()}
+    lines = ["repo\tlast sweep\tosv\tgitleaks\tworkflows\timage\thooks\terrors\tui opt-in"]
     for repo in repos_under(roots):
+        ui = answers.get(gitdiff.origin(str(repo)) or str(repo.resolve()), "")
         last = last_sweep(repo / ".git")
         if not last:
-            lines.append(f"{repo}\tnever\t\t\t\t\t\t")
+            lines.append(f"{repo}\tnever\t\t\t\t\t\t\t{ui}")
             continue
         c = counts(last)
-        lines.append(f"{repo}\t{last['ts'][:10]}\t{c['osv']}\t{c['gitleaks']}\t{c['workflows']}\t{c['image']}\t{c['hooks']}\t{c['errors']}")
+        lines.append(f"{repo}\t{last['ts'][:10]}\t{c['osv']}\t{c['gitleaks']}\t{c['workflows']}\t{c['image']}\t{c['hooks']}\t{c['errors']}\t{ui}")
     return "\n".join(lines) + "\n"
 
 
