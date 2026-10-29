@@ -288,12 +288,15 @@ class ScanTest(unittest.TestCase):
         self.write("AGENTS.md", "x\u200by\n")
         self.write("package-lock.json", npm_lock([("evil-pkg", "1.0.0"), ("ghost-pkg", "1.0.0"), ("slow-pkg", "1.0.0")]))
         outputs = [self.scan("--staged")[1], self.scan_inproc(FakeNet())]
+        from review_loop import design_tokens  # an advisory ui finding must validate too
+        outputs.append({"exit_code": 0, "summary": "advisory_only",
+                        "findings": design_tokens.scan({"src/B.tsx": {1: "color: '#ff0000'"}})})
         self.git("remote", "add", "origin", "https://gitlab.example.invalid/client/app.git")
         outputs.append(self.scan_inproc(FakeNet()))
         self.lock.write_text("")
         outputs.append(self.scan("--staged")[1])
         statuses = {f["status"] for o in outputs for f in o["findings"]}
-        self.assertEqual(statuses, {"hard", "needs_human"})
+        self.assertEqual(statuses, {"hard", "needs_human", "advisory"})
         data = self.tmp / "outputs.json"
         data.write_text(json.dumps(outputs))
         checker = (
