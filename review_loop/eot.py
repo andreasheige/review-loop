@@ -215,7 +215,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
             raise StopReview  # D1, any confidence: the diff may hold a secret, so no model may see it
         if diff_paths:
             record["findings"] += review(repo, base, head, text, eligible, deleted, diff_paths, finders, verifiers,
-                                         round_dir, record, runner)
+                                         round_dir, record, runner, hints=hints_from(record["findings"]))
     except StopReview:
         stopped = True
     except (EotError, workers.WorkerError, GitError, OSError) as e:
@@ -294,15 +294,42 @@ def completed(r: dict) -> bool:
         f["rule_class"] == "secret" and f["introduced_by"] == "diff" for f in r["findings"])
 
 
+# Paths where a second, security-only finder runs as well (plan 6.1 "path-triggered extra security finder", on trial).
+SECURITY_PATH = re.compile(r"(^|/)(auth|login|logout|session|token|oauth|jwt|saml|sso|crypto|secret|password|permission|"
+                           r"acl|rbac|policy|policies|middleware|security|csrf|cors|sanitiz|upload|\.github/workflows/)"
+                           r"|(^|/)(Dockerfile|nginx\.conf|.*\.tf)$", re.I)
+
+
+def sensitive(repo: str) -> bool:
+    """Real users' data (Decision 1): client repos under ~/Knowit, or `git config review-loop.sensitive true`."""
+    if git(repo, "config", "--bool", "review-loop.sensitive", check=False).stdout.decode().strip() == "true":
+        return True
+    knowit = Path.home() / "Knowit"
+    return Path(repo).resolve().is_relative_to(knowit.resolve()) if knowit.exists() else False
+
+
+def hints_from(findings: list[dict]) -> list[dict]:
+    """Scanner findings as finder hints: never a secret (D1 stops the models anyway), never a value."""
+    return [{"rule_class": f.get("rule_class"), "path": f["sites"][0]["path"], "line": f["sites"][0]["start_line"],
+             "title": f["title"]} for f in findings if f.get("sites") and f.get("rule_class") != "secret"]
+
+
 def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verifiers, round_dir, record, runner,
-           prior=(), known=(), verify_diff=None) -> list[dict]:
+           prior=(), known=(), verify_diff=None, hints=()) -> list[dict]:
     """prior: open findings from earlier rounds, verified again (recheck); one stays open unless every verifier
     refutes it, and a proven one is left to its repro. known: earlier advisory findings, never reported again.
     verify_diff: what verifiers see (default: the finder's diff). The finder only runs when there are paths to read."""
     diff = git(repo, "--literal-pathspecs", "diff", "-M", "--no-color", "--no-ext-diff", base, head, "--",
                *diff_paths).stdout.decode("utf-8", "replace")
     verify_diff = diff if verify_diff is None else verify_diff
-    prompt = workers.find_prompt(text, diff, eligible + [f"{p} (deleted)" for p in deleted], known=known)
+    paths = eligible + [f"{p} (deleted)" for p in deleted]
+    personal = sensitive(repo)
+    prompt = workers.find_prompt(text, diff, paths, known=known, hints=hints, personal_data=personal)
+    security_prompt = None
+    if any(SECURITY_PATH.search(p) for p in eligible):
+        security_prompt = workers.find_prompt(text, diff, paths, lenses=("security",), known=known, hints=hints,
+                                              personal_data=personal)
+        write_prompt(round_dir / "prompts/find-security.md", security_prompt)
     suppress = {k["id"] for k in known}
     write_prompt(round_dir / "prompts/find.md", prompt)
     find_schema, verify_schema = workers.load_schema("finder-output"), workers.load_schema("verifier-output")
@@ -311,8 +338,10 @@ def review(repo, base, head, text, eligible, deleted, diff_paths, finders, verif
             missing = sorted(set(eligible) - set(output["reviewed_paths"]))
             return f"reviewed_paths leaves out changed paths: {', '.join(missing)}" if missing else None
 
-        runs = list(pool.map(lambda s: run_worker(s, "finder", prompt, find_schema, wt, runner, coverage),
-                             finders if eligible or deleted else []))
+        finder_jobs = [(s, "finder", prompt) for s in finders] + [(s, "security-finder", security_prompt)
+                                                                   for s in finders if security_prompt]
+        runs = list(pool.map(lambda j: run_worker(j[0], j[1], j[2], find_schema, wt, runner, coverage),
+                             finder_jobs if eligible or deleted else []))
         found: dict[str, dict] = {}
         for output, entry in runs:
             record["workers"].append(entry)

@@ -176,7 +176,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
                        *ticket_paths).stdout.decode("utf-8", "replace")
             record["findings"] += eot.review(repo, since if diff_paths else base, head, text, eligible, deleted,
                                              diff_paths or ticket_paths, finders, verifiers, round_dir, record, runner,
-                                             open_, known, verify_diff=full)
+                                             open_, known, verify_diff=full, hints=eot.hints_from(record["findings"]))
             reviewed = True
     except eot.StopReview:
         stopped = True
