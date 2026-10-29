@@ -123,6 +123,25 @@ class GateTest(unittest.TestCase):
         self.assertIn("reviewloop-canary", err)
         self.assertNotEqual(sha, head)
 
+    def test_push_url_is_asked_not_the_fetch_url(self):
+        sha = self.add_canary()
+        self.git("push", "-q", "origin", f"{sha}:refs/heads/main")  # the fetch side already has the canary
+        empty = self.tmp / "push-target.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(empty)], env=self.env, check=True)
+        self.mode_file.write_text("block\n")
+        rc, err = self.gate([f"refs/heads/main {sha} refs/heads/main {ZERO}"], str(empty))
+        self.assertEqual(rc, 1)
+        self.assertIn("reviewloop-canary", err)
+
+    def test_hidden_unicode_added_and_removed_within_the_push_is_found(self):
+        base = self.git("rev-parse", "HEAD")
+        self.commit("src/a.py", "x = 1  # \u202e\n")
+        tip = self.commit("src/a.py", "x = 1\n")
+        self.mode_file.write_text("block\n")
+        rc, err = self.gate([f"refs/heads/feat {tip} refs/heads/feat {base}"])
+        self.assertEqual(rc, 1)
+        self.assertIn("unicode", err)
+
     def test_delete_is_skipped(self):
         sha = self.add_canary()
         self.mode_file.write_text("block\n")
