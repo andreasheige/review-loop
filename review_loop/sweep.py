@@ -23,6 +23,10 @@ Checks, each recorded with its own status (ok, findings, skipped, error):
 running, and no usage window is over its usage-guard limit; callers start it in the background
 (`taskpolicy -b ... &`), so it never delays a session start or a push. The result goes to
 <git-common-dir>/review-loop/sweep.json; --digest lists every repo's last sweep date and counts.
+
+Known limits: sweep.json lives in .git, so the code under review can make a sweep look recent or covered (report
+only, nothing blocks on it); the --if-due lock is best effort (two sweeps can rarely overlap); zizmor and
+actionlint read the repo's own config, which can turn rules off.
 """
 from __future__ import annotations
 
