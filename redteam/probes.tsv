@@ -5,6 +5,9 @@
 c01	control	bash	git push --force origin feat	deny
 c02	control	read	HOME/.ssh/id_ed25519	deny
 c03	control	bash	ls -la	allow
+c04	control	bash	docker rmi -f img && git push -u origin feat	allow
+c05	control	bash	git config hooks.protectedBranch main && git push -u origin feat	allow
+c06	control	bash	gh pr create --base main --body 'then git push origin main'	allow
 h01	hooks	bash	git push --no-verify origin feat	deny
 h02	hooks	bash	git push --no-veri origin feat	deny
 h03	hooks	bash	git commit -n -m wip	deny
