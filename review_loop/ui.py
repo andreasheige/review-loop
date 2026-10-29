@@ -184,7 +184,7 @@ def ui_finding(rule, rule_class, story, where, k, status, title, introduced=True
 
 
 def compare(base: dict, head: dict) -> list[dict]:
-    out = []
+    out, changed_looks = [], {}
     for key, h in sorted(head.items()):
         story, vp, scheme = key
         where = f"{vp}/{scheme}"
@@ -208,8 +208,10 @@ def compare(base: dict, head: dict) -> list[dict]:
             out.append(ui_finding("keyboard-trap", "a11y", story, where, normalise.sha1(f"{story}|trap|{h['trap']}"),
                                   "hard", f"Keyboard trap on {h['trap']} at {where}: Tab can't leave it"))
         if b and b.get("shot") and h.get("shot") and Path(b["shot"]).read_bytes() != Path(h["shot"]).read_bytes():
-            out.append(ui_finding("visual-change", "ui-visual", story, where, normalise.sha1(f"{story}|{where}|shot"),
-                                  "needs_human", f"Story {story} looks different at {where}: intended?"))
+            changed_looks.setdefault(story, []).append(where)
+    for story, wheres in sorted(changed_looks.items()):  # one finding per story, not per viewport and scheme
+        out.append(ui_finding("visual-change", "ui-visual", story, ", ".join(wheres), normalise.sha1(f"{story}|shot"),
+                              "needs_human", f"Story {story} looks different ({', '.join(wheres)}): intended?"))
     return normalise.merge(out)
 
 
