@@ -158,6 +158,15 @@ class GateTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("unicode", err)
 
+    def test_binary_file_with_nul_bytes_in_a_multi_commit_push(self):
+        base = self.git("rev-parse", "HEAD")
+        (self.repo / "asset.bin").write_bytes(b"A\x00\xff\n@commit " + b"0" * 40 + b"\n")
+        self.git("add", "asset.bin")
+        self.git("commit", "-q", "-m", "add asset")
+        tip = self.commit("src/ok.py", "x = 1\n")
+        self.mode_file.write_text("block\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {tip} refs/heads/feat {base}"]), (0, ""))
+
     def test_delete_is_skipped(self):
         sha = self.add_canary()
         self.mode_file.write_text("block\n")
