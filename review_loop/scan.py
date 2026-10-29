@@ -2,7 +2,8 @@
 
 usage: review-loop scan (--staged | --range A..B) [--policy] [--sarif PATH] [--format json|text]
 
---policy adds the NEEDS_HUMAN control-weakening classes (review_loop/policy.py), exempts young dependencies in
+--policy adds the NEEDS_HUMAN control-weakening classes (review_loop/policy.py), the advisory design-token lint in
+repos that opt in (review_loop/design_tokens.py), exempts young dependencies in
 lockfile-only bot commits, and applies `review-loop accept` entries. Without it (the pre-commit hook) neither runs,
 so nothing on disk can weaken the D1–D3 scan.
 
@@ -18,7 +19,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import accept, deps, gitdiff, normalise, policy as policy_classes, unicode_check
+from . import accept, deps, design_tokens, gitdiff, normalise, policy as policy_classes, unicode_check
 from .secret_scan import Gitleaks
 from .tools import ToolError
 
@@ -61,6 +62,8 @@ def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = Non
             findings += dep
         if policy:
             findings += policy_classes.scan(repo, staged, base, head)
+            if design_tokens.enabled(repo):
+                findings += design_tokens.scan(added)
     except gitdiff.GitError as e:
         errors.append(f"D2: {e}")
     finally:

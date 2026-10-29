@@ -62,6 +62,33 @@ class PolicyTest(RepoCase):
         self.commit("feat: snapshot view")
         self.assertNotIn("ui-baseline", self.rules(self.scan()))
 
+    # design-token lint (plan 7.3)
+    def design(self, files):
+        for path, text in files.items():
+            self.write(path, text)
+        self.commit("feat: ui")
+        out = self.scan()
+        return out, [f for f in out["findings"] if f["rule_class"] == "design-token"]
+
+    def test_hard_coded_colour_is_advisory_when_opted_in(self):
+        self.git("config", "review-loop.design-tokens", "true")
+        out, found = self.design({
+            "src/Button.tsx": "export const B = () => <b style={{ color: '#ff0000' }} />;\n",
+            "src/Card.tsx": "export const C = () => <div className=\"bg-[#1a2b3c] p-2\" />;\n",
+            "src/app.css": ".x { background: rgba(0, 0, 0, 0.5); }\n",
+            "src/styles/colors.ts": "export const red = '#ff0000';\n",
+            "src/theme/base.css": ":root { --brand: #123456; }\n",
+            "src/Entity.html": "<p>&#123; not a colour</p>\n",
+            "src/util.ts": "// see issue #123\n",
+        })
+        self.assertEqual(sorted(f["sites"][0]["path"] for f in found), ["src/Button.tsx", "src/Card.tsx", "src/app.css"])
+        self.assertEqual({(f["status"], f["lens"]) for f in found}, {("advisory", "ui")})
+        self.assertEqual(out["exit_code"], 0, "warn-first: never blocks")
+
+    def test_design_tokens_off_without_the_config(self):
+        _, found = self.design({"src/Button.tsx": "export const B = () => <b style={{ color: '#ff0000' }} />;\n"})
+        self.assertEqual(found, [])
+
     def test_removed_assertion_in_a_test(self):
         self.write("tests/test_calc.py", "def test_add():\n    assert add(2, 1) == 3\n")
         self.commit("test")

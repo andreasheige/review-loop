@@ -69,7 +69,7 @@
     },
     "rule_class": {
       "description": "Deterministic class for tool hits and NEEDS_HUMAN classes; null for plain model findings.",
-      "enum": [null, "secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "dep-young", "sast", "workflow", "control-weakening"]
+      "enum": [null, "secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "dep-young", "sast", "workflow", "control-weakening", "design-token"]
     },
     "introduced_by": {
       "description": "diff = hunk overlap with the reviewed range (for secrets: relative to the target remote). pre-existing findings go to backlog and never block the ticket.",
