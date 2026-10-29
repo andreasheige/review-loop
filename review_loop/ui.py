@@ -9,6 +9,11 @@ repo's own Playwright and axe-core: for each story near a changed file, at mobil
 dark, an axe WCAG 2.0-2.2 A/AA pass, a Tab-sequence keyboard-trap check and a screenshot. Every request to a
 host other than localhost is aborted. --static-base/--static-head take two already built sites instead.
 
+Without Playwright + axe-core in the repo it asks once, at a terminal (/dev/tty, which an agent's shell
+lacks, so an agent can't answer): yes (prints the install command; review-loop installs nothing), not now
+(asked again on a UI change after 7 days) or never. Answers live in <state dir>/ui-optin.json keyed by the
+remote URL; `sweep --digest` shows them, "never" included. Until then the run is skipped with exit 0.
+
 Compared with base: a new serious or critical axe violation, or a new keyboard trap -> hard (a11y); a new
 minor or moderate one -> needs_human; a story whose screenshot changed -> needs_human (ui-visual: maybe
 intended, a human looks); anything already on base -> advisory, pre-existing (backlog). The result goes to
@@ -30,6 +35,7 @@ import threading
 from pathlib import Path
 
 from . import eot, gitdiff, normalise
+from .secret_scan import state_dir
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "ui" / "runner.mjs"
@@ -40,8 +46,64 @@ MAX_STORIES = 30
 BLOCKING_IMPACT = {"serious", "critical"}
 
 
+SNOOZE_DAYS = 7
+INSTALL = "npm i -D playwright axe-core && npx playwright install chromium"
+
+
 class UiError(Exception):
     pass
+
+
+def optin_path() -> Path:
+    return state_dir() / "ui-optin.json"
+
+
+def optin_key(repo: str) -> str:
+    return gitdiff.origin(repo) or str(Path(repo).resolve())
+
+
+def optins() -> dict:
+    try:
+        data = json.loads(optin_path().read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def ask_on_tty(question: str) -> str | None:
+    """y / n / v typed at the terminal, or None without one (an agent's shell)."""
+    try:
+        with open("/dev/tty", "r+") as tty:
+            tty.write(f"{question} [y]es / [n]ot now / ne[v]er: ")
+            tty.flush()
+            return tty.readline().strip().lower()[:1] or None
+    except OSError:
+        return None
+
+
+def optin(repo: str, ask=ask_on_tty) -> str:
+    """'yes', 'snoozed', 'never' or 'unanswered' for running without Playwright here."""
+    import datetime
+
+    key, data = optin_key(repo), optins()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    prior = data.get(key) or {}
+    if prior.get("answer") == "never":
+        return "never"
+    if prior.get("answer") == "not_now":
+        try:
+            if now - datetime.datetime.fromisoformat(prior["at"]) < datetime.timedelta(days=SNOOZE_DAYS):
+                return "snoozed"
+        except (KeyError, ValueError):
+            pass
+    reply = ask(f"The UI lens needs Playwright and axe-core in {Path(repo).name}. Install them?")
+    answer = {"y": "yes", "n": "not_now", "v": "never"}.get(reply or "")
+    if not answer:
+        return "unanswered"
+    data[key] = {"answer": answer, "at": now.isoformat(timespec="seconds"), "tty": True}
+    optin_path().parent.mkdir(parents=True, exist_ok=True)
+    optin_path().write_text(json.dumps(data, indent=1) + "\n")
+    return {"yes": "yes", "not_now": "snoozed", "never": "never"}[answer]
 
 
 def node_modules(repo: str) -> Path | None:
@@ -151,7 +213,7 @@ def compare(base: dict, head: dict) -> list[dict]:
     return normalise.merge(out)
 
 
-def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | None = None) -> dict:
+def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | None = None, ask=None) -> dict:
     repo = gitdiff.git(repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
     head = gitdiff.verify_commit(repo, rev)
     base = gitdiff.git(repo, "merge-base", gitdiff.verify_commit(repo, base_ref), head).stdout.decode().strip()
@@ -161,8 +223,12 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | N
         return {**result, "status": "not_applicable", "outcome": {"exit_code": 0, "summary": "not_applicable"}}
     nm = node_modules(repo)
     if not nm:
-        return {**result, "status": "no_playwright",
-                "outcome": {"exit_code": 3, "summary": "error", "error": "no Playwright + axe-core in node_modules"}}
+        state = optin(repo, ask) if ask is not None else optin(repo)
+        message = {"yes": f"install them, then run again: {INSTALL}", "snoozed": "asked recently: not now",
+                   "never": "this repo opted out of the UI lens (never)",
+                   "unanswered": "no Playwright + axe-core here; a human answers the opt-in at a terminal"}[state]
+        return {**result, "status": f"no_playwright:{state}", "message": message,
+                "outcome": {"exit_code": 0, "summary": "skipped"}}
     error = None
     try:
         with tempfile.TemporaryDirectory(prefix="review-loop-ui-") as tmp:
@@ -209,6 +275,8 @@ def main(argv: list[str]) -> int:
     backlog = sum(1 for f in result["findings"] if f["status"] == "advisory")
     if backlog:
         lines.append(f"  {backlog} pre-existing finding(s) to backlog")
+    if result.get("message"):
+        lines.append(f"  {result['message']}")
     if result["outcome"].get("error"):
         lines.append(f"  error: {result['outcome']['error']}")
     sys.stdout.write("\n".join(lines) + "\n")
