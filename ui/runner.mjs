@@ -5,7 +5,7 @@
 //          shots: <dir>, out: <results.json>}
 //
 // For every story x viewport x colour scheme: load <baseUrl>/iframe.html?id=<id>&viewMode=story with every
-// request to a host other than 127.0.0.1/localhost aborted, run axe-core (WCAG 2.0/2.1/2.2 A and AA tags),
+// request to another origin aborted (service workers blocked, WebSockets closed), run axe-core (WCAG 2.0/2.1/2.2 A and AA tags),
 // press Tab up to 25 times to find a keyboard trap, and take a screenshot. Playwright and axe-core come from
 // the repo under review (nodeModules), so review-loop installs nothing.
 import { createRequire } from "node:module";
@@ -17,7 +17,7 @@ const require = createRequire(path.join(config.nodeModules, "noop.js"));
 const { chromium } = require("playwright");
 const axeSource = readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
 const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
-const LOCAL = /^(https?:\/\/)(127\.0\.0\.1|localhost)(:\d+)?\//;
+const ORIGIN = new URL(config.baseUrl).origin;  // only the site under test: not other local ports
 
 mkdirSync(config.shots, { recursive: true });
 const browser = await chromium.launch();
@@ -26,8 +26,9 @@ try {
   for (const scheme of config.schemes) {
     for (const vp of config.viewports) {
       const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, colorScheme: scheme,
-                                                 reducedMotion: "reduce" });
-      await context.route("**/*", (route) => (LOCAL.test(route.request().url()) ? route.continue() : route.abort()));
+                                                 reducedMotion: "reduce", serviceWorkers: "block" });
+      await context.route("**/*", (route) => (new URL(route.request().url()).origin === ORIGIN ? route.continue() : route.abort()));
+      if (context.routeWebSocket) await context.routeWebSocket(/.*/, (ws) => ws.close());
       const page = await context.newPage();
       for (const id of config.stories) {
         const key = `${id}|${vp.name}|${scheme}`;
