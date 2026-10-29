@@ -147,6 +147,17 @@ def retry_prompt(prompt: str, error: str) -> str:
             "Return only JSON that matches the schema.\n</previous_attempt>\n")
 
 
+def normalise_cwe(output):
+    """`CWE 79`, `cwe-79`, `79` -> `CWE-79`; anything without a number -> null. Models format this field loosely,
+    and one malformed `cwe` used to fail the whole round (exit 3) after the retry; it never changes a status."""
+    if isinstance(output, dict) and isinstance(output.get("findings"), list):
+        for f in output["findings"]:
+            if isinstance(f, dict) and isinstance(f.get("cwe"), str):
+                m = re.fullmatch(r"\s*(?:cwe)?[\s:_-]*(\d+)\s*", f["cwe"], re.I)
+                f["cwe"] = f"CWE-{int(m.group(1))}" if m else None
+    return output
+
+
 def with_retry(prompt: str, schema: dict, once: Callable[[str], tuple], check: Callable | None = None) -> dict:
     """Call once(prompt) -> (output or None, usage, error); retry once with the error; raise WorkerError.
     check(output) -> error or None adds a caller rule on top of the schema (e.g. coverage)."""
@@ -156,7 +167,7 @@ def with_retry(prompt: str, schema: dict, once: Callable[[str], tuple], check: C
         for k, v in used.items():
             usage[k] = usage.get(k, 0) + v
         if error is None:
-            errs = validate(output, schema)
+            errs = validate(normalise_cwe(output), schema)
             if not errs and check:
                 errs = [e for e in [check(output)] if e]
             if not errs:
