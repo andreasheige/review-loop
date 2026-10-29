@@ -224,6 +224,36 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]), (0, ""))
         self.assertEqual(self.log()[-1]["reviews"], [])
 
+    # UI results (review-loop.ui-required)
+    def ui_result(self, sha, findings=(), exit_code=0):
+        base = self.git("merge-base", "main", sha)
+        d = self.repo / ".git" / "review-loop" / eot.patch_id(str(self.repo), base, sha)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "ui.json").write_text(json.dumps({"findings": list(findings), "outcome": {"exit_code": exit_code}}))
+
+    def test_ui_touching_push_without_a_ui_result_is_refused_in_block_mode(self):
+        self.git("config", "review-loop.ui-required", "true")
+        sha = self.commit("src/Button.tsx", "export const B = 1;\n")
+        self.mode_file.write_text("block\n")
+        rc, err = self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])
+        self.assertEqual(rc, 1)
+        self.assertIn("has no UI result", err)
+        self.ui_result(sha)
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]), (0, ""))
+
+    def test_ui_result_with_an_open_finding_is_refused(self):
+        self.git("config", "review-loop.ui-required", "true")
+        sha = self.commit("src/Button.tsx", "export const B = 1;\n")
+        self.ui_result(sha, [{"id": "sec-reviewloop-aaaaaaaaaaaa", "status": "hard", "rule_class": "a11y"}], 1)
+        self.mode_file.write_text("block\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])[0], 1)
+
+    def test_non_ui_push_needs_no_ui_result(self):
+        self.git("config", "review-loop.ui-required", "true")
+        sha = self.commit("src/ok.py", "x = 1\n")
+        self.mode_file.write_text("block\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]), (0, ""))
+
     def test_delete_is_skipped(self):
         sha = self.add_canary()
         self.mode_file.write_text("block\n")

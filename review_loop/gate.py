@@ -17,6 +17,10 @@ eot/recheck record whose newest round, with accepts applied again now, has no op
 needs_human finding and no error. A missing or failing record warns in warn mode and refuses in block mode.
 `REVIEW_LOOP_SKIP=1` skips this check only (never the scan) and appends a line to review-loop/skips.log.
 
+UI results (plan 7.5), only with `git config review-loop.ui-required true`: a pushed change that touches UI files
+(review_loop/ui.py's classes) needs a `review-loop ui` result for the same patch-id with nothing open after accepts;
+missing or failing warns, and refuses in block mode. REVIEW_LOOP_SKIP doesn't cover it.
+
 Each run appends one line to <state dir>/gate.jsonl (repo, mode, exit, rule classes, ms, review states; no paths or values),
 for the per-rule precision check before switching to block and the p95 < 10 s check.
 """
@@ -136,6 +140,37 @@ def intermediate_unicode(repo: str, base: str, head: str) -> list[dict]:
 OPEN = {"hard", "proven", "blocking", "needs_human"}
 
 
+def change_base(repo: str, remote: str, local_sha: str) -> str | None:
+    """merge-base of the pushed sha with the remote's default branch, asked of the remote."""
+    default = remote_default(repo, remote)
+    if default in (None, EMPTY) or not has_commit(repo, default):
+        return None
+    return gitdiff.git(repo, "merge-base", default, local_sha, check=False).stdout.decode().strip() or None
+
+
+def ui_state(repo: str, remote: str, local_sha: str) -> tuple[str, str]:
+    from . import ui
+
+    base = change_base(repo, remote, local_sha)
+    if not base:
+        return "missing", "no UI base (the remote's default branch is unknown here)"
+    if not ui.ui_paths(repo, base, local_sha):
+        return "ok", ""
+    try:
+        pid = eot.patch_id(repo, base, local_sha)
+    except eot.EotError:
+        return "ok", ""
+    common = Path(repo, gitdiff.git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
+    try:
+        result = json.loads((common / "review-loop" / pid / "ui.json").read_text())
+    except (OSError, ValueError):
+        return "missing", f"this change touches UI files and has no UI result (patch-id {pid[:12]}): run `review-loop ui`"
+    open_ = [f for f in accept.apply(repo, result.get("findings", [])) if f["status"] in OPEN]
+    if result.get("outcome", {}).get("exit_code") == 3 or open_:
+        return "failing", f"the UI result has {len(open_)} open finding(s) or an error: fix, run `review-loop ui` again, or accept at a terminal"
+    return "ok", ""
+
+
 def review_state(repo: str, remote: str, local_sha: str) -> tuple[str, str]:
     """(state, message) for the review record of this ref's change: ok, missing, failing or skipped."""
     default = remote_default(repo, remote)
@@ -190,6 +225,12 @@ def run(repo: str, remote: str, stdin: str, block: bool = False) -> tuple[int, s
         if gitdiff.git(repo, "config", "--bool", "review-loop.gate", check=False).stdout.decode().strip() == "true":
             state, message = review_state(repo, remote, local_sha)
             reviews.append(state)
+            if state in ("missing", "failing"):
+                codes.append(2)
+                reports.append(f"{remote_ref}: {message}\n")
+        if gitdiff.git(repo, "config", "--bool", "review-loop.ui-required", check=False).stdout.decode().strip() == "true":
+            state, message = ui_state(repo, remote, local_sha)
+            reviews.append(f"ui:{state}")
             if state in ("missing", "failing"):
                 codes.append(2)
                 reports.append(f"{remote_ref}: {message}\n")
