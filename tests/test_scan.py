@@ -47,7 +47,7 @@ def entropy_value():
 
 
 class FakeNet:
-    """OSV + registry stand-in: names starting evil- are MAL, ghost- do not exist, slow- time out."""
+    """OSV + registry stand-in: names starting evil- are MAL, cve- have known CVEs, ghost- do not exist, slow- time out."""
 
     def __init__(self):
         self.calls = []
@@ -58,6 +58,8 @@ class FakeNet:
         if "slow-" in name:
             raise socket.timeout("timed out")
         if body:
+            if name.startswith("cve-"):
+                return 200, {"vulns": [{"id": "GHSA-aaaa-bbbb-cccc"}, {"id": "CVE-2026-0002"}]}
             return 200, {"vulns": [{"id": "MAL-2026-0001"}]} if name.startswith("evil-") else {}
         return (404, None) if "ghost-" in url else (200, {})
 
@@ -256,6 +258,24 @@ class ScanTest(unittest.TestCase):
         self.assertNotIn("left-pad", " ".join(net.calls), "unchanged versions are not looked up")
         line = next(f for f in out["findings"] if "evil-pkg" in f["title"])["sites"][0]["start_line"]
         self.assertIn('"node_modules/evil-pkg"', (self.repo / "package-lock.json").read_text().split("\n")[line - 1])
+
+    def test_downgrade_needs_a_human_and_known_cves_advise(self):
+        self.write("package-lock.json", npm_lock([("lodash", "4.17.21"), ("cve-pkg", "1.0.0")]))
+        self.commit("lock")
+        self.write("package-lock.json", npm_lock([("lodash", "4.17.4"), ("cve-pkg", "1.0.1")]))
+        out = self.scan_inproc(FakeNet())
+        got = sorted((f["rule_class"], f["status"], f["title"]) for f in out["findings"])
+        self.assertEqual(got, [
+            ("dep-downgrade", "needs_human", "lodash downgraded 4.17.21 → 4.17.4 in package-lock.json"),
+            ("dep-vuln", "advisory", "cve-pkg@1.0.1 has 2 known vulnerabilities (CVE-2026-0002, GHSA-aaaa-bbbb-cccc)"),
+        ])
+        self.assertEqual(out["exit_code"], 2)
+
+    def test_upgrade_is_not_a_downgrade(self):
+        self.write("package-lock.json", npm_lock([("lodash", "4.17.4")]))
+        self.commit("lock")
+        self.write("package-lock.json", npm_lock([("lodash", "4.17.21")]))
+        self.assertEqual([f for f in self.scan_inproc(FakeNet())["findings"] if f["rule_class"] == "dep-downgrade"], [])
 
     def test_deps_timeout_alone_is_needs_human(self):
         self.write("package-lock.json", npm_lock([("slow-pkg", "2.0.0")]))

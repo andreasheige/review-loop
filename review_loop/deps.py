@@ -1,7 +1,9 @@
 """D3: added/changed resolved versions in package-lock.json (v2/v3) and uv.lock.
 
-Online (origin github.com/andreasheige/* or no origin): OSV MAL-* → hard dep-mal; missing from the public
-registry → hard dep-nonexistent; any lookup error or timeout → needs_human. Other origins (client repos,
+Online (origin github.com/andreasheige/* or no origin): OSV MAL-* → hard dep-mal; other OSV ids (known CVEs) →
+advisory dep-vuln (Decision 6: other CVEs advise); missing from the public registry → hard dep-nonexistent; any
+lookup error or timeout → needs_human. Everywhere, no network needed: a package whose new version is lower than
+every old version of it → needs_human dep-downgrade (a downgrade can bring back fixed vulnerabilities). Other origins (client repos,
 Decision 8) make no network call: osv-scanner --offline against its local DB if present, else needs_human.
 The network layer is injectable (Net) so tests run offline.
 """
@@ -85,6 +87,23 @@ def parse_uv(text: str) -> dict[tuple[str, str], tuple[int, bool]]:
 PARSERS = {"npm": parse_npm, "PyPI": parse_uv}
 
 
+def version_key(v: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v)[:4])
+
+
+def downgrades(old: str | None, new: str, eco: str, pkgs: dict) -> dict:
+    """{(name, version): (line, old versions)} for changed packages whose new version is below every old one."""
+    try:
+        old_pkgs = PARSERS[eco](old) if old else {}
+    except ValueError:
+        return {}
+    before: dict[str, list[str]] = {}
+    for name, version in old_pkgs:
+        before.setdefault(name, []).append(version)
+    return {(n, v): (line, before[n]) for (n, v), (line, _) in pkgs.items()
+            if before.get(n) and all(version_key(v) < version_key(o) for o in before[n])}
+
+
 def changed(old: str | None, new: str, eco: str) -> dict:
     new_pkgs = PARSERS[eco](new)
     try:
@@ -116,7 +135,7 @@ def check_online(path: str, eco: str, pkgs: dict, net: Net) -> list[dict]:
                                    {"version": version, "package": {"name": name, "ecosystem": eco}})
         if status != 200 or not isinstance(body, dict):
             raise ValueError(f"OSV status {status}")
-        return sorted(v["id"] for v in body.get("vulns", []) if str(v.get("id", "")).startswith("MAL-"))
+        return sorted(str(v["id"]) for v in body.get("vulns", []) if v.get("id"))
 
     def exists(name, version):
         status, _ = net.request(registry_url(eco, name, version))
@@ -136,7 +155,14 @@ def check_online(path: str, eco: str, pkgs: dict, net: Net) -> list[dict]:
     findings = []
     for (name, version), (line, _) in pkgs.items():
         label = f"{name}@{version}"
-        mal = results[((name, version), "osv")]
+        ids = results[((name, version), "osv")]
+        mal = ids if isinstance(ids, Exception) else [i for i in ids if i.startswith("MAL-")]
+        known = [] if isinstance(ids, Exception) else [i for i in ids if not i.startswith("MAL-")]
+        if known:
+            findings.append(_dep_finding("dep-vuln", path, eco, name, version, line, "advisory", "dep-vuln",
+                                         f"{label} has {len(known)} known vulnerabilit{'y' if len(known) == 1 else 'ies'}"
+                                         f" ({', '.join(known[:3])}{', …' if len(known) > 3 else ''})",
+                                         f"OSV lists {', '.join(known)} for {eco} {label}.", f"osv.dev@v1:{known[0]}", "osv"))
         if isinstance(mal, Exception):
             findings.append(_dep_finding("dep-mal-unverified", path, eco, name, version, line, "needs_human", "dep-mal",
                                          f"OSV lookup failed for {label}", f"OSV lookup failed ({type(mal).__name__}).",
@@ -224,5 +250,10 @@ def scan(lockfiles: list[tuple[str, str | None, str]], origin: str | None, net: 
             continue
         if not pkgs:
             continue
+        for (name, version), (line, olds) in downgrades(old, new, eco, pkgs).items():
+            findings.append(_dep_finding("dep-downgrade", path, eco, name, version, line, "needs_human", "dep-downgrade",
+                                         f"{name} downgraded {max(olds, key=version_key)} → {version} in {path}",
+                                         f"The lockfile moves {name} below every version it had before.",
+                                         f"{REF}:dep-downgrade", "reviewloop"))
         findings += check_online(path, eco, pkgs, net or Net()) if online else check_offline(path, eco, pkgs, new)
     return findings
