@@ -58,6 +58,11 @@ def _lines(repo, staged, base, head, removed: bool, text: bool, renames: bool) -
     out = git(repo, "diff", "-U0", "-M" if renames else "--no-renames", *(["--text", "--no-textconv"] if text else []),
               "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/",
               *diff_args(staged, base, head)).stdout
+    return parse(out, removed)
+
+
+def parse(out: bytes, removed: bool = False) -> dict[str, dict[int, str]]:
+    """{path: {line number: text}} of the added (or removed) lines in -U0 diff output with a/ b/ prefixes."""
     files: dict[str, dict[int, str]] = {}
     path, lineno, in_hunk = None, 0, False
     header, prefix, sign, hunk = (b"--- ", "a/", b"-", OLD_HUNK) if removed else (b"+++ ", "b/", b"+", HUNK)
