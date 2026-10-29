@@ -49,3 +49,27 @@ def resolve(tool: str) -> tuple[str, str]:
     if sha256(path) != digest.strip().lower():
         raise ToolError(f"{tool}: sha256 mismatch at {path}")
     return path, version
+
+
+def write_safely(path: Path, text: str, root: Path) -> None:
+    """Write path (under root) without following a planted symlink: refuse a symlinked directory between root and
+    path, write a fresh 0600 temp file next to it, and rename it into place (a rename replaces a symlink at path
+    instead of writing through it). For files under .git/review-loop, which the code under review can touch."""
+    import tempfile
+
+    d = path.parent
+    while True:
+        if d.is_symlink():
+            raise OSError(f"refusing to write under a symlinked directory: {d}")
+        if d == root or d == d.parent:
+            break
+        d = d.parent
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
