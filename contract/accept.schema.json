@@ -9,7 +9,7 @@
   "properties": {
     "finding_id": {"type": "string", "pattern": "^(sec-[a-z0-9]+|rev)-[0-9a-f]{12}$"},
     "rule_class": {
-      "enum": ["review", "secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "dep-young", "sast", "workflow", "control-weakening"]
+      "enum": ["review", "secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "dep-young", "sast", "workflow", "control-weakening", "dep-downgrade", "a11y", "ui-visual"]
     },
     "reason": {"type": "string", "minLength": 10},
     "expires": {
