@@ -14,6 +14,7 @@ import time
 import unittest
 from pathlib import Path
 
+from review_loop import eot
 from tests.test_scan import BIN, GITLEAKS_ROW, canary
 
 ZERO = "0" * 40
@@ -60,8 +61,8 @@ class GateTest(unittest.TestCase):
         self.secrets.append(c)
         return self.commit("src/x.ts", "".join(f"export const v{i} = {i};\n" for i in range(20)) + f'export const t = "{c}";\n')
 
-    def gate(self, lines, *args, remote="origin"):
-        p = subprocess.run([str(BIN), "gate", remote, *args], cwd=self.repo, env=self.env,
+    def gate(self, lines, *args, remote="origin", env=None):
+        p = subprocess.run([str(BIN), "gate", remote, *args], cwd=self.repo, env={**self.env, **(env or {})},
                            input="".join(f"{l}\n" for l in lines), capture_output=True, text=True)
         for s in self.secrets:
             self.assertNotIn(s, p.stdout + p.stderr, "secret value leaked into output")
@@ -166,6 +167,62 @@ class GateTest(unittest.TestCase):
         tip = self.commit("src/ok.py", "x = 1\n")
         self.mode_file.write_text("block\n")
         self.assertEqual(self.gate([f"refs/heads/feat {tip} refs/heads/feat {base}"]), (0, ""))
+
+    # review records (review-loop.gate)
+    def record(self, sha, findings=(), exit_code=0, rnd=1):
+        base = self.git("merge-base", "main", sha)
+        pid = eot.patch_id(str(self.repo), base, sha)
+        d = self.repo / ".git" / "review-loop" / pid / f"round-{rnd}"
+        d.mkdir(parents=True)
+        (d / "record.json").write_text(json.dumps({
+            "command": "eot" if rnd == 1 else "recheck", "round": rnd, "head": sha, "branch": "feat",
+            "created_at": f"2026-10-29T00:00:0{rnd}+00:00", "findings": list(findings),
+            "outcome": {"exit_code": exit_code}}))
+
+    def test_review_record_missing_warns_then_refuses(self):
+        self.git("config", "review-loop.gate", "true")
+        sha = self.commit("src/ok.py", "x = 1\n")
+        line = [f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]
+        rc, err = self.gate(line)
+        self.assertEqual(rc, 0)
+        self.assertIn("no review record", err)
+        self.mode_file.write_text("block\n")
+        self.assertEqual(self.gate(line)[0], 1)
+        self.assertEqual(self.log()[-1]["reviews"], ["missing"])
+
+    def test_review_record_passing_round_passes(self):
+        self.git("config", "review-loop.gate", "true")
+        sha = self.commit("src/ok.py", "x = 1\n")
+        blocking = {"id": "rev-aaaaaaaaaaaa", "status": "blocking", "rule_class": None}
+        self.record(sha, [blocking], exit_code=1, rnd=1)
+        self.record(sha, [{**blocking, "status": "discarded"}], exit_code=0, rnd=2)
+        self.mode_file.write_text("block\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]), (0, ""))
+
+    def test_review_record_with_open_finding_refuses(self):
+        self.git("config", "review-loop.gate", "true")
+        sha = self.commit("src/ok.py", "x = 1\n")
+        self.record(sha, [{"id": "rev-bbbbbbbbbbbb", "status": "needs_human", "rule_class": "control-weakening"}], exit_code=2)
+        self.mode_file.write_text("block\n")
+        rc, err = self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])
+        self.assertEqual(rc, 1)
+        self.assertIn("1 open finding", err)
+
+    def test_review_skip_is_logged_and_never_skips_the_scan(self):
+        self.git("config", "review-loop.gate", "true")
+        clean = self.commit("src/ok.py", "x = 1\n")
+        self.mode_file.write_text("block\n")
+        skip = {"REVIEW_LOOP_SKIP": "1"}
+        self.assertEqual(self.gate([f"refs/heads/feat {clean} refs/heads/feat {ZERO}"], env=skip), (0, ""))
+        self.assertIn(clean, (self.repo / ".git/review-loop/skips.log").read_text())
+        dirty = self.add_canary()
+        self.assertEqual(self.gate([f"refs/heads/feat {dirty} refs/heads/feat {ZERO}"], env=skip)[0], 1)
+
+    def test_review_check_is_off_without_the_config(self):
+        sha = self.commit("src/ok.py", "x = 1\n")
+        self.mode_file.write_text("block\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]), (0, ""))
+        self.assertEqual(self.log()[-1]["reviews"], [])
 
     def test_delete_is_skipped(self):
         sha = self.add_canary()
