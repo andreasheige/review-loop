@@ -88,20 +88,31 @@ PARSERS = {"npm": parse_npm, "PyPI": parse_uv}
 
 
 def version_key(v: str) -> tuple:
-    return tuple(int(x) for x in re.findall(r"\d+", v)[:4])
+    """Numeric release parts, then 1 for a release and 0 for a pre-release (2.0.0-rc.1 < 2.0.0)."""
+    release, _, pre = v.partition("-")
+    nums = tuple(int(x) for x in re.findall(r"\d+", release)[:4])
+    return nums + (0,) * (4 - len(nums)) + (0 if pre or re.search(r"(a|b|rc|dev)\d*$", release) else 1,)
 
 
 def downgrades(old: str | None, new: str, eco: str, pkgs: dict) -> dict:
-    """{(name, version): (line, old versions)} for changed packages whose new version is below every old one."""
+    """{(name, version): (line, [old version])} for a package that had exactly one version before and has exactly one
+    now, lower than before. A name with several copies (a nested older copy next to the top-level one) is skipped:
+    without per-path keys it can't be told apart from a downgrade."""
     try:
-        old_pkgs = PARSERS[eco](old) if old else {}
+        old_pkgs, new_pkgs = (PARSERS[eco](old) if old else {}), PARSERS[eco](new)
     except ValueError:
         return {}
-    before: dict[str, list[str]] = {}
-    for name, version in old_pkgs:
-        before.setdefault(name, []).append(version)
+
+    def by_name(p):
+        out: dict[str, list[str]] = {}
+        for name, version in p:
+            out.setdefault(name, []).append(version)
+        return out
+
+    before, after = by_name(old_pkgs), by_name(new_pkgs)
     return {(n, v): (line, before[n]) for (n, v), (line, _) in pkgs.items()
-            if before.get(n) and all(version_key(v) < version_key(o) for o in before[n])}
+            if len(before.get(n, [])) == 1 and len(after.get(n, [])) == 1
+            and version_key(v) < version_key(before[n][0])}
 
 
 def changed(old: str | None, new: str, eco: str) -> dict:
