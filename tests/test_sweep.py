@@ -98,6 +98,15 @@ class SweepTest(unittest.TestCase):
         g = self.result()["checks"]["gitleaks"]
         self.assertEqual(([h["path"] for h in g["hits"]], g["range"]), (["src/x.ts"], "all history"))
 
+    def test_a_planted_symlink_is_replaced_not_written_through(self):
+        victim = self.tmp / "gate-mode"
+        victim.write_text("block\n")
+        (self.repo / ".git/review-loop").mkdir(parents=True)
+        (self.repo / ".git/review-loop/sweep.json").symlink_to(victim)
+        self.sweep()
+        self.assertEqual(victim.read_text(), "block\n")
+        self.assertFalse((self.repo / ".git/review-loop/sweep.json").is_symlink())
+
     def test_client_repo_without_offline_db_skips_osv(self):
         self.sweep()
         self.assertEqual(self.result()["checks"]["osv"]["status"], "skipped")
@@ -148,7 +157,7 @@ class SweepTest(unittest.TestCase):
         self.assertEqual((image["status"], image["dockerfiles"]), ("skipped", ["svc/Dockerfile"]))
 
     def test_trivy_report_parsed_and_deduped_with_osv(self):
-        report = {"Results": [{"Target": "app (alpine 3.19)", "Vulnerabilities": [
+        report = {"SchemaVersion": 2, "ArtifactName": "app.tar", "Results": [{"Target": "app (alpine 3.19)", "Vulnerabilities": [
             {"PkgName": "openssl", "InstalledVersion": "3.1.0", "VulnerabilityID": "CVE-2026-0001", "Severity": "HIGH",
              "FixedVersion": "3.1.1"},
             {"PkgName": "lodash", "InstalledVersion": "4.17.15", "VulnerabilityID": "CVE-2020-8203", "Severity": "HIGH"}]}]}
@@ -157,7 +166,8 @@ class SweepTest(unittest.TestCase):
         self.assertEqual((got["status"], got["deduped"], got["by_severity"]), ("findings", 1, {"HIGH": 1}))
         self.assertEqual(got["vulns"][0]["id"], "CVE-2026-0001")
         self.assertEqual(sweep.parse_trivy(b"", [])["status"], "error")
-        self.assertEqual(sweep.parse_trivy(b'{"Results": []}', [])["status"], "ok")
+        self.assertEqual(sweep.parse_trivy(b'{"SchemaVersion": 2, "ArtifactName": "a", "Results": []}', [])["status"], "ok")
+        self.assertEqual(sweep.parse_trivy(b"{}", [])["status"], "error")  # not a Trivy report
 
     def test_digest_lists_last_sweep_dates(self):
         other = self.tmp / "other"
