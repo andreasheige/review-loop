@@ -11,7 +11,13 @@ No base at all (unreachable remote, commits not fetched) is a tool error.
 
 Mode: warn (default) prints and exits 0; block exits 1 on any block, needs_human or tool error. Block comes
 from the file ~/.config/review-loop/gate-mode holding `block`, or from --block; neither can make it weaker.
-Each run appends one line to <state dir>/gate.jsonl (repo, mode, exit, rule classes, ms; no paths or values),
+Review records (plan 6.6), only in repos with `git config review-loop.gate true`: each pushed ref's change
+(merge-base with the remote's default branch .. the pushed sha, keyed by the same patch-id eot uses) needs an
+eot/recheck record whose newest round, with accepts applied again now, has no open hard, blocking, proven or
+needs_human finding and no error. A missing or failing record warns in warn mode and refuses in block mode.
+`REVIEW_LOOP_SKIP=1` skips this check only (never the scan) and appends a line to review-loop/skips.log.
+
+Each run appends one line to <state dir>/gate.jsonl (repo, mode, exit, rule classes, ms, review states; no paths or values),
 for the per-rule precision check before switching to block and the p95 < 10 s check.
 """
 from __future__ import annotations
@@ -25,7 +31,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import gitdiff, normalise, scan, unicode_check
+from . import accept, eot, gitdiff, normalise, scan, unicode_check
 from .secret_scan import state_dir
 from .tools import SAFE_PATH
 
@@ -127,9 +133,45 @@ def intermediate_unicode(repo: str, base: str, head: str) -> list[dict]:
     return found
 
 
+OPEN = {"hard", "proven", "blocking", "needs_human"}
+
+
+def review_state(repo: str, remote: str, local_sha: str) -> tuple[str, str]:
+    """(state, message) for the review record of this ref's change: ok, missing, failing or skipped."""
+    default = remote_default(repo, remote)
+    if default in (None, EMPTY) or not has_commit(repo, default):
+        return "missing", "no review base (the remote's default branch is unknown here): run `git fetch` and `review-loop eot`"
+    base = gitdiff.git(repo, "merge-base", default, local_sha, check=False).stdout.decode().strip()
+    if not base:
+        return "missing", "no merge-base with the remote's default branch"
+    try:
+        pid = eot.patch_id(repo, base, local_sha)
+    except eot.EotError:
+        return "ok", ""  # nothing to review
+    if os.environ.get("REVIEW_LOOP_SKIP") == "1":
+        common = Path(repo, gitdiff.git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
+        try:
+            (common / "review-loop").mkdir(parents=True, exist_ok=True)
+            with open(common / "review-loop" / "skips.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')}\tgate\t{pid}\t{local_sha}\n")
+        except OSError:
+            pass
+        return "skipped", "review check skipped (REVIEW_LOOP_SKIP=1, logged)"
+    common = Path(repo, gitdiff.git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
+    rounds = [r for r, d in eot.records(common) if d.parent.name == pid]
+    if not rounds:
+        return "missing", f"no review record for this change (patch-id {pid[:12]}): run `review-loop eot` first"
+    newest = max(rounds, key=lambda r: (r["round"], r["created_at"]))
+    still_open = [f for f in accept.apply(repo, newest["findings"]) if f["status"] in OPEN]
+    if newest["outcome"]["exit_code"] == 3 or still_open:
+        what = "ended in an error" if newest["outcome"]["exit_code"] == 3 else f"has {len(still_open)} open finding(s)"
+        return "failing", f"review round {newest['round']} {what}: fix and run `review-loop recheck`, or accept at a terminal"
+    return "ok", ""
+
+
 def run(repo: str, remote: str, stdin: str, block: bool = False) -> tuple[int, str]:
     start, gate_mode = time.monotonic(), mode(block)
-    reports, codes, classes = [], [], []
+    reports, codes, classes, reviews = [], [], [], []
     try:
         repo = gitdiff.git(repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
         refs = parse_refs(stdin)
@@ -145,6 +187,12 @@ def run(repo: str, remote: str, stdin: str, block: bool = False) -> tuple[int, s
             reports.append(f"review-loop gate: {remote_ref}: no base to compare with (remote unreachable, or its "
                            f"commits aren't fetched): run `git fetch {remote}` and push again\n")
             continue
+        if gitdiff.git(repo, "config", "--bool", "review-loop.gate", check=False).stdout.decode().strip() == "true":
+            state, message = review_state(repo, remote, local_sha)
+            reviews.append(state)
+            if state in ("missing", "failing"):
+                codes.append(2)
+                reports.append(f"{remote_ref}: {message}\n")
         if base == local_sha:
             continue
         out = scan.run(repo, False, f"{base}..{local_sha}", policy=True)
@@ -157,7 +205,7 @@ def run(repo: str, remote: str, stdin: str, block: bool = False) -> tuple[int, s
         if out["exit_code"]:
             reports.append(f"{remote_ref}: " + scan.text_report(out))
     code = max(codes, default=0)
-    log(repo, gate_mode, code, classes, round((time.monotonic() - start) * 1000))
+    log(repo, gate_mode, code, classes, round((time.monotonic() - start) * 1000), reviews)
     if not code:
         return 0, ""
     if gate_mode == "warn":
@@ -165,12 +213,12 @@ def run(repo: str, remote: str, stdin: str, block: bool = False) -> tuple[int, s
     return 1, "".join(f"✘ {r}" for r in reports) + "  Push refused (review-loop gate). Fix the findings, or accept a needs_human one at a terminal.\n"
 
 
-def log(repo: str, gate_mode: str, code: int, classes: list, ms: int) -> None:
+def log(repo: str, gate_mode: str, code: int, classes: list, ms: int, reviews: list) -> None:
     try:
         d = state_dir()
         d.mkdir(parents=True, exist_ok=True)
         line = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-                "repo": Path(repo).name, "mode": gate_mode, "exit": code, "classes": sorted(set(c or "-" for c in classes)), "ms": ms}
+                "repo": Path(repo).name, "mode": gate_mode, "exit": code, "classes": sorted(set(c or "-" for c in classes)), "ms": ms, "reviews": reviews}
         with open(d / "gate.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(line) + "\n")
     except OSError:
