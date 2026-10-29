@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from review_loop import eot
@@ -30,7 +31,7 @@ class GateTest(unittest.TestCase):
         self.mode_file = self.tmp / "gate-mode"
         self.env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1",
                         REVIEW_LOOP_TOOLS_LOCK=str(self.lock), REVIEW_LOOP_STATE_DIR=str(self.tmp / "state"),
-                        REVIEW_LOOP_GATE_MODE_FILE=str(self.mode_file),
+                        REVIEW_LOOP_GATE_MODE_FILE=str(self.mode_file), HOME=str(self.tmp / "home"),
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
                         GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
         self.secrets = []
@@ -208,15 +209,54 @@ class GateTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("1 open finding", err)
 
-    def test_review_skip_is_logged_and_never_skips_the_scan(self):
+    def test_review_skip_needs_a_terminal_and_never_skips_the_scan(self):
         self.git("config", "review-loop.gate", "true")
         clean = self.commit("src/ok.py", "x = 1\n")
         self.mode_file.write_text("block\n")
         skip = {"REVIEW_LOOP_SKIP": "1"}
-        self.assertEqual(self.gate([f"refs/heads/feat {clean} refs/heads/feat {ZERO}"], env=skip), (0, ""))
-        self.assertIn(clean, (self.repo / ".git/review-loop/skips.log").read_text())
+        # an agent's push has no /dev/tty: the skip is not honoured
+        self.assertEqual(self.gate([f"refs/heads/feat {clean} refs/heads/feat {ZERO}"], env=skip)[0], 1)
+        base = self.git("merge-base", "main", clean)
+        with mock.patch.dict(os.environ, {**self.env, **skip}, clear=True):
+            from review_loop import gate
+            self.assertEqual(gate.review_state(str(self.repo), base, clean, confirm=lambda q: True)[0], "skipped")
+        self.assertIn(clean, (self.tmp / "state/skips.log").read_text())
         dirty = self.add_canary()
         self.assertEqual(self.gate([f"refs/heads/feat {dirty} refs/heads/feat {ZERO}"], env=skip)[0], 1)
+
+    def test_review_record_for_other_content_with_the_same_patch_id_is_not_enough(self):
+        self.git("config", "review-loop.gate", "true")
+        self.commit("src/auth.py", "def delete(u):\n    if u.admin:\n        log(u)\n")
+        self.git("push", "-q", "origin", "HEAD:main")
+        base = self.git("rev-parse", "HEAD")
+        reviewed = self.commit("src/auth.py", "def delete(u):\n    if u.admin:\n        log(u)\n        delete_all()\n")
+        self.record(reviewed)
+        self.git("reset", "-q", "--hard", base)
+        pushed = self.commit("src/auth.py", "def delete(u):\n    if u.admin:\n        log(u)\n    delete_all()\n")
+        self.assertEqual(eot.patch_id(str(self.repo), base, reviewed), eot.patch_id(str(self.repo), base, pushed),
+                         "the fixture must be a real patch-id collision")
+        self.mode_file.write_text("block\n")
+        rc, err = self.gate([f"refs/heads/feat {pushed} refs/heads/feat {ZERO}"])
+        self.assertEqual(rc, 1)
+        self.assertIn("no review record for this content", err)
+
+    def test_opt_in_cannot_be_switched_off_with_git_c(self):
+        self.git("config", "review-loop.gate", "true")
+        sha = self.commit("src/ok.py", "x = 1\n")
+        self.mode_file.write_text("block\n")
+        off = {"GIT_CONFIG_PARAMETERS": "'review-loop.gate'='false'", "GIT_CONFIG_COUNT": "1",
+               "GIT_CONFIG_KEY_0": "review-loop.gate", "GIT_CONFIG_VALUE_0": "false"}
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"], env=off)[0], 1)
+
+    def test_mode_override_cannot_weaken_block_and_garbled_mode_blocks(self):
+        sha = self.add_canary()
+        home_mode = self.tmp / "home/.config/review-loop/gate-mode"
+        home_mode.parent.mkdir(parents=True)
+        home_mode.write_text("block\n")
+        self.mode_file.write_text("warn\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])[0], 1)
+        home_mode.write_text("blocc\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])[0], 1)
 
     def test_review_check_is_off_without_the_config(self):
         sha = self.commit("src/ok.py", "x = 1\n")
@@ -225,11 +265,12 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.log()[-1]["reviews"], [])
 
     # UI results (review-loop.ui-required)
-    def ui_result(self, sha, findings=(), exit_code=0):
+    def ui_result(self, sha, findings=(), exit_code=0, **extra):
         base = self.git("merge-base", "main", sha)
         d = self.repo / ".git" / "review-loop" / eot.patch_id(str(self.repo), base, sha)
         d.mkdir(parents=True, exist_ok=True)
-        (d / "ui.json").write_text(json.dumps({"findings": list(findings), "outcome": {"exit_code": exit_code}}))
+        (d / "ui.json").write_text(json.dumps({"head": sha, "base": base, "findings": list(findings),
+                                               "outcome": {"exit_code": exit_code}, **extra}))
 
     def test_ui_touching_push_without_a_ui_result_is_refused_in_block_mode(self):
         self.git("config", "review-loop.ui-required", "true")
@@ -245,6 +286,13 @@ class GateTest(unittest.TestCase):
         self.git("config", "review-loop.ui-required", "true")
         sha = self.commit("src/Button.tsx", "export const B = 1;\n")
         self.ui_result(sha, [{"id": "sec-reviewloop-aaaaaaaaaaaa", "status": "hard", "rule_class": "a11y"}], 1)
+        self.mode_file.write_text("block\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])[0], 1)
+
+    def test_static_ui_result_does_not_count(self):
+        self.git("config", "review-loop.ui-required", "true")
+        sha = self.commit("src/Button.tsx", "export const B = 1;\n")
+        self.ui_result(sha, static=True)
         self.mode_file.write_text("block\n")
         self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])[0], 1)
 

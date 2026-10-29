@@ -10,12 +10,15 @@ anything with write access to .git can forge. A remote with no refs yet (first p
 No base at all (unreachable remote, commits not fetched) is a tool error.
 
 Mode: warn (default) prints and exits 0; block exits 1 on any block, needs_human or tool error. Block comes
-from the file ~/.config/review-loop/gate-mode holding `block`, or from --block; neither can make it weaker.
+from ~/.config/review-loop/gate-mode holding `block` (or anything unreadable or unknown: fail closed), from --block,
+or from REVIEW_LOOP_GATE_MODE_FILE; none of them can make another one weaker.
 Review records (plan 6.6), only in repos with `git config review-loop.gate true`: each pushed ref's change
 (merge-base with the remote's default branch .. the pushed sha, keyed by the same patch-id eot uses) needs an
 eot/recheck record whose newest round, with accepts applied again now, has no open hard, blocking, proven or
 needs_human finding and no error. A missing or failing record warns in warn mode and refuses in block mode.
-`REVIEW_LOOP_SKIP=1` skips this check only (never the scan) and appends a line to review-loop/skips.log.
+`REVIEW_LOOP_SKIP=1` plus a "y" at the terminal skips this check only (never the scan), logged to <state>/skips.log.
+A record counts only for the exact pushed content: same patch-id, and its head has the pushed tree. The opt-ins
+are read from .git/config alone, so `git -c review-loop.gate=false push` doesn't switch them off.
 
 UI results (plan 7.5), only with `git config review-loop.ui-required true`: a pushed change that touches UI files
 (review_loop/ui.py's classes) needs a `review-loop ui` result for the same patch-id with nothing open after accepts;
@@ -44,16 +47,34 @@ SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 COMMIT_LINE = re.compile(rb"\n@commit ([0-9a-f]{40}(?:[0-9a-f]{24})?)(?=\n|$)")
 
 
-def mode_file() -> Path:
-    return Path(os.environ.get("REVIEW_LOOP_GATE_MODE_FILE") or Path.home() / ".config/review-loop/gate-mode")
+DEFAULT_MODE_FILE = Path.home() / ".config/review-loop/gate-mode"
+
+
+def mode_says_block(path: Path) -> bool:
+    """`block`, or a file that exists but can't be read or holds anything but warn/block (fail closed)."""
+    if not path.exists() and not path.is_symlink():
+        return False
+    try:
+        return path.read_text().strip() not in ("", "warn")
+    except (OSError, UnicodeDecodeError):
+        return True
 
 
 def mode(block_flag: bool) -> str:
-    try:
-        configured = mode_file().read_text().strip()
-    except OSError:
-        configured = ""
-    return "block" if block_flag or configured == "block" else "warn"
+    """block when --block, the default mode file, or REVIEW_LOOP_GATE_MODE_FILE says so: an override can only make
+    the gate stricter (REVIEW_LOOP_GATE_MODE_FILE=/dev/null doesn't turn block into warn)."""
+    files = [DEFAULT_MODE_FILE] + ([Path(os.environ["REVIEW_LOOP_GATE_MODE_FILE"])]
+                                   if os.environ.get("REVIEW_LOOP_GATE_MODE_FILE") else [])
+    return "block" if block_flag or any(mode_says_block(f) for f in files) else "warn"
+
+
+def repo_flag(repo: str, key: str) -> bool:
+    """A repo-local opt-in, read from .git/config only: `git -c key=false push` (GIT_CONFIG_PARAMETERS) and
+    GIT_CONFIG_* in the hook's env can't switch it off."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CONFIG")}
+    p = subprocess.run(["git", "-C", repo, "config", "--local", "--bool", key], capture_output=True,
+                       env={**env, "PATH": SAFE_PATH})
+    return p.stdout.decode().strip() == "true"
 
 
 def parse_refs(text: str) -> list[tuple[str, str, str, str]]:
@@ -141,17 +162,27 @@ OPEN = {"hard", "proven", "blocking", "needs_human"}
 
 
 def change_base(repo: str, remote: str, local_sha: str) -> str | None:
-    """merge-base of the pushed sha with the remote's default branch, asked of the remote."""
+    """merge-base of the pushed sha with the remote's default branch, asked of the remote (once per ref)."""
     default = remote_default(repo, remote)
     if default in (None, EMPTY) or not has_commit(repo, default):
         return None
     return gitdiff.git(repo, "merge-base", default, local_sha, check=False).stdout.decode().strip() or None
 
 
-def ui_state(repo: str, remote: str, local_sha: str) -> tuple[str, str]:
+def tree(repo: str, sha: str) -> str | None:
+    p = gitdiff.git(repo, "rev-parse", "--verify", "--quiet", f"{sha}^{{tree}}", check=False)
+    return p.stdout.decode().strip() or None
+
+
+def common_dir(repo: str) -> Path:
+    return Path(repo, gitdiff.git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
+
+
+def ui_state(repo: str, base: str | None, local_sha: str) -> tuple[str, str]:
+    """A UI result for exactly this content: patch-id finds it, and its head must have the pushed tree and its base
+    this merge-base (a patch-id ignores whitespace and context, so a different change can share one)."""
     from . import ui
 
-    base = change_base(repo, remote, local_sha)
     if not base:
         return "missing", "no UI base (the remote's default branch is unknown here)"
     if not ui.ui_paths(repo, base, local_sha):
@@ -160,42 +191,47 @@ def ui_state(repo: str, remote: str, local_sha: str) -> tuple[str, str]:
         pid = eot.patch_id(repo, base, local_sha)
     except eot.EotError:
         return "ok", ""
-    common = Path(repo, gitdiff.git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
     try:
-        result = json.loads((common / "review-loop" / pid / "ui.json").read_text())
+        result = json.loads((common_dir(repo) / "review-loop" / pid / "ui.json").read_text())
     except (OSError, ValueError):
         return "missing", f"this change touches UI files and has no UI result (patch-id {pid[:12]}): run `review-loop ui`"
+    if result.get("static") or result.get("base") != base or tree(repo, result.get("head", "")) != tree(repo, local_sha):
+        return "missing", "the UI result is for other content than this push: run `review-loop ui` again"
     open_ = [f for f in accept.apply(repo, result.get("findings", [])) if f["status"] in OPEN]
     if result.get("outcome", {}).get("exit_code") == 3 or open_:
         return "failing", f"the UI result has {len(open_)} open finding(s) or an error: fix, run `review-loop ui` again, or accept at a terminal"
     return "ok", ""
 
 
-def review_state(repo: str, remote: str, local_sha: str) -> tuple[str, str]:
-    """(state, message) for the review record of this ref's change: ok, missing, failing or skipped."""
-    default = remote_default(repo, remote)
-    if default in (None, EMPTY) or not has_commit(repo, default):
-        return "missing", "no review base (the remote's default branch is unknown here): run `git fetch` and `review-loop eot`"
-    base = gitdiff.git(repo, "merge-base", default, local_sha, check=False).stdout.decode().strip()
+def skip_confirmed(pid: str, local_sha: str, confirm=None) -> bool:
+    """REVIEW_LOOP_SKIP=1 plus a y typed at the terminal (an agent's shell has none). Logged to the state dir."""
+    from .stats import confirm_on_tty
+
+    if os.environ.get("REVIEW_LOOP_SKIP") != "1" or not (confirm or confirm_on_tty)("Skip the review-record check for this push?"):
+        return False
+    try:
+        state_dir().mkdir(parents=True, exist_ok=True)
+        with open(state_dir() / "skips.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')}\tgate\t{pid}\t{local_sha}\n")
+    except OSError:
+        pass
+    return True
+
+
+def review_state(repo: str, base: str | None, local_sha: str, confirm=None) -> tuple[str, str]:
+    """(state, message) for the review record of exactly this content: ok, missing, failing or skipped."""
     if not base:
-        return "missing", "no merge-base with the remote's default branch"
+        return "missing", "no review base (the remote's default branch is unknown here): run `git fetch` and `review-loop eot`"
     try:
         pid = eot.patch_id(repo, base, local_sha)
     except eot.EotError:
         return "ok", ""  # nothing to review
-    if os.environ.get("REVIEW_LOOP_SKIP") == "1":
-        common = Path(repo, gitdiff.git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
-        try:
-            (common / "review-loop").mkdir(parents=True, exist_ok=True)
-            with open(common / "review-loop" / "skips.log", "a", encoding="utf-8") as f:
-                f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')}\tgate\t{pid}\t{local_sha}\n")
-        except OSError:
-            pass
-        return "skipped", "review check skipped (REVIEW_LOOP_SKIP=1, logged)"
-    common = Path(repo, gitdiff.git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip())
-    rounds = [r for r, d in eot.records(common) if d.parent.name == pid]
+    if skip_confirmed(pid, local_sha, confirm):
+        return "skipped", "review check skipped (REVIEW_LOOP_SKIP=1, confirmed at the terminal, logged)"
+    want = tree(repo, local_sha)
+    rounds = [r for r, d in eot.records(common_dir(repo)) if d.parent.name == pid and tree(repo, r["head"]) == want]
     if not rounds:
-        return "missing", f"no review record for this change (patch-id {pid[:12]}): run `review-loop eot` first"
+        return "missing", f"no review record for this content (patch-id {pid[:12]}): run `review-loop eot` (or recheck)"
     newest = max(rounds, key=lambda r: (r["round"], r["created_at"]))
     still_open = [f for f in accept.apply(repo, newest["findings"]) if f["status"] in OPEN]
     if newest["outcome"]["exit_code"] == 3 or still_open:
@@ -222,14 +258,16 @@ def run(repo: str, remote: str, stdin: str, block: bool = False) -> tuple[int, s
             reports.append(f"review-loop gate: {remote_ref}: no base to compare with (remote unreachable, or its "
                            f"commits aren't fetched): run `git fetch {remote}` and push again\n")
             continue
-        if gitdiff.git(repo, "config", "--bool", "review-loop.gate", check=False).stdout.decode().strip() == "true":
-            state, message = review_state(repo, remote, local_sha)
+        gate_on, ui_on = repo_flag(repo, "review-loop.gate"), repo_flag(repo, "review-loop.ui-required")
+        merge_base = change_base(repo, remote, local_sha) if gate_on or ui_on else None
+        if gate_on:
+            state, message = review_state(repo, merge_base, local_sha)
             reviews.append(state)
             if state in ("missing", "failing"):
                 codes.append(2)
                 reports.append(f"{remote_ref}: {message}\n")
-        if gitdiff.git(repo, "config", "--bool", "review-loop.ui-required", check=False).stdout.decode().strip() == "true":
-            state, message = ui_state(repo, remote, local_sha)
+        if ui_on:
+            state, message = ui_state(repo, merge_base, local_sha)
             reviews.append(f"ui:{state}")
             if state in ("missing", "failing"):
                 codes.append(2)
