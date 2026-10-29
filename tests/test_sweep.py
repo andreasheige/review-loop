@@ -103,6 +103,7 @@ class SweepTest(unittest.TestCase):
         victim.write_text("block\n")
         (self.repo / ".git/review-loop").mkdir(parents=True)
         (self.repo / ".git/review-loop/sweep.json").symlink_to(victim)
+        (self.repo / ".git/review-loop/sweep.json.tmp").symlink_to(victim)  # the old fixed temp name
         self.sweep()
         self.assertEqual(victim.read_text(), "block\n")
         self.assertFalse((self.repo / ".git/review-loop/sweep.json").is_symlink())
