@@ -282,6 +282,8 @@ def check_workflows(repo: str) -> dict:
     try:
         exe, _ = resolve("actionlint")
         p = run_tool([exe, "-format", "{{json .}}"], repo)
+        if p.returncode not in (0, 1):  # 2/3: bad flags or a fatal error, with nothing on stdout
+            raise ValueError(f"exited {p.returncode}")
         for f in json.loads(p.stdout or b"[]"):
             out.append({"tool": "actionlint", "rule": f.get("kind"), "path": f.get("filepath"), "line": f.get("line")})
     except (ToolError, ValueError, subprocess.TimeoutExpired) as e:
@@ -338,17 +340,23 @@ def sweep(repo: str) -> dict:
     start = time.monotonic()
     repo = gitdiff.git(repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
     common = common_dir(repo)
-    head = gitdiff.git(repo, "rev-parse", "HEAD", check=False).stdout.decode().strip()
+    head = gitdiff.git(repo, "rev-parse", "--verify", "--quiet", "HEAD", check=False).stdout.decode().strip()
     last = last_sweep(common) or {}
+    # where the last gitleaks run that worked got to: a failed one must not make its commits look covered
+    since = (last.get("checks", {}).get("gitleaks", {}).get("through") or None)
     osv = check_osv(repo)
     checks = {
         "osv": osv,
-        "gitleaks": check_gitleaks(repo, last.get("head"), head) if head else {"status": "skipped", "why": "no commits"},
+        "gitleaks": check_gitleaks(repo, since, head) if head else {"status": "skipped", "why": "no commits"},
         "workflows": check_workflows(repo),
         "hooks": check_hooks(repo, common),
         "image": check_image(repo, osv),
         "sast": {"status": "skipped", "why": "no own Semgrep rules yet (Decision 7)"},
     }
+    if checks["gitleaks"]["status"] != "error" and head:
+        checks["gitleaks"]["through"] = head
+    elif since:
+        checks["gitleaks"]["through"] = since
     machine = check_machine()
     if machine:
         checks["machine"] = machine
