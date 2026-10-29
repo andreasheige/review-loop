@@ -31,6 +31,7 @@ from .tools import SAFE_PATH
 
 ZERO = re.compile(r"^0+$")
 SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
+COMMIT_LINE = re.compile(rb"\n@commit ([0-9a-f]{40}(?:[0-9a-f]{24})?)(?=\n|$)")
 
 
 def mode_file() -> Path:
@@ -110,14 +111,17 @@ def intermediate_unicode(repo: str, base: str, head: str) -> list[dict]:
     `git log -p` for the whole push, so there is no commit cap. D3 and the policy classes stay endpoint-only:
     a lockfile or config change undone later in the push never reaches the pushed tree."""
     out = gitdiff.git(repo, "log", "-p", "-U0", "--no-color", "--no-ext-diff", "--text", "--no-textconv", "-M",
-                      "--src-prefix=a/", "--dst-prefix=b/", "--diff-merges=first-parent", "--format=%x00%H",
+                      "--src-prefix=a/", "--dst-prefix=b/", "--diff-merges=first-parent", "--format=@commit %H",
                       f"{base}..{head}").stdout
-    commits = [c.split(b"\n", 1) for c in out.split(b"\0") if c.strip()]
+    # Split on the commit lines: every diff content line starts with + - space or \\, so `@commit <sha>` at
+    # the start of a line is always ours (a NUL or any other byte in --text content can't fake it).
+    parts = COMMIT_LINE.split(b"\n" + out)
+    commits = list(zip(parts[1::2], parts[2::2]))
     if len(commits) < 2:
         return []
     found = []
-    for sha, diff in (c if len(c) == 2 else (c[0], b"") for c in commits):
-        sha = sha.decode().strip()
+    for sha, diff in commits:
+        sha = sha.decode()
         lines = gitdiff.parse(diff)
         found += unicode_check.scan({p: v for p, v in lines.items() if not gitdiff.is_binary(repo, f"{sha}:{p}")})
     return found
