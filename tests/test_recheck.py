@@ -10,11 +10,12 @@ import os
 import sys
 import unittest
 from contextlib import redirect_stdout
+from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from review_loop import recheck  # noqa: E402 - needs the sys.path entry above
+from review_loop import accept, recheck, scan  # noqa: E402 - needs the sys.path entry above
 from tests.test_eot import BUG, NIT, FakeClaude, RepoCase  # noqa: E402
 from tests.test_scan import canary  # noqa: E402
 
@@ -148,6 +149,22 @@ class RecheckTest(RepoCase):
         code, out = self.recheck(FakeClaude(CLEAN))
         self.assertEqual(code, 1)
         self.assertNotIn("note", out)
+
+    def test_expired_accept_is_not_hidden_by_an_unchanged_patch(self):
+        self.change()
+        self.write("src/u.py", "x = 1  # \u202e\n")
+        self.commit("feat: u")
+        fid = next(f["id"] for f in scan.run(str(self.repo), staged=False, rng=f"{self.base}..HEAD", policy=True)[
+            "findings"] if f["rule_class"] == "unicode")
+        store = accept.store(str(self.repo))
+        store.parent.mkdir(parents=True, exist_ok=True)
+        row = {"finding_id": fid, "rule_class": "unicode", "reason": "a test fixture", "tty": True}
+        store.write_text(json.dumps({**row, "expires": (date.today() + timedelta(days=5)).isoformat()}) + "\n")
+        both = {"findings": [], "reviewed_paths": ["src/calc.py", "src/u.py"]}
+        self.assertEqual(self.eot(FakeClaude(both))[0], 0)
+        store.write_text(json.dumps({**row, "expires": (date.today() - timedelta(days=1)).isoformat()}) + "\n")
+        code, out = self.recheck(FakeClaude(both))
+        self.assertEqual(code, 1, "the accept expired, so the hidden Unicode blocks again")
 
     def test_verifier_sees_the_whole_ticket_diff(self):
         self.blocked_eot()
