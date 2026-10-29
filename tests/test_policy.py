@@ -24,6 +24,7 @@ PLANTED = {
     "scanner-config": (".gitleaksignore", "abc:src/x.ts:generic-api-key:1\n"),
     "git-hooks": (".husky/pre-commit", "exit 0\n"),
     "review-loop-config": (".review-loop.toml", "[gate]\nmode = 'warn'\n"),
+    "ui-baseline": ("src/__snapshots__/Button.test.tsx.snap", "exports[`Button 1`] = `<button />`;\n"),
     "suppression": ("src/a.ts", "// eslint-disable-next-line no-eval\nconst x = 1;\n"),
 }
 
@@ -46,6 +47,20 @@ class PolicyTest(RepoCase):
                 self.assertEqual(out["exit_code"], 2)
                 self.assertEqual(self.rules(out)[rule]["status"], "needs_human")
                 self.assertEqual(self.scan(policy=False)["exit_code"], 0, "the pre-commit scan is unchanged")
+
+    def test_ui_baselines_and_a11y_config_need_a_human(self):
+        for path in ("e2e/home.spec.ts-snapshots/home-chromium-darwin.png", ".storybook/test-runner.ts",
+                     "axe.config.json", ".lighthouserc.json", "backstop_data/bitmaps_reference/a.png"):
+            with self.subTest(path=path):
+                self.git("reset", "-q", "--hard", self.base)
+                self.write(path, "x\n")
+                self.commit("test: update baseline")
+                self.assertEqual(self.rules(self.scan())["ui-baseline"]["status"], "needs_human")
+
+    def test_ordinary_ui_code_is_not_a_baseline(self):
+        self.write("src/components/Snapshot.tsx", "export const Snapshot = () => null;\n")
+        self.commit("feat: snapshot view")
+        self.assertNotIn("ui-baseline", self.rules(self.scan()))
 
     def test_removed_assertion_in_a_test(self):
         self.write("tests/test_calc.py", "def test_add():\n    assert add(2, 1) == 3\n")
