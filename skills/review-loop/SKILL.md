@@ -9,8 +9,11 @@ CLI: `$REVIEW_LOOP_BIN`, else `review-loop` on `PATH`, else `~/Dev/review-loop/b
 
 ## Finishing a ticket
 
-1. Commit the ticket's work on its feature branch, with an honest `Co-Authored-By` trailer: the reviewers are
-   picked from the other model family than the one that wrote the code.
+1. Commit the ticket's work on its feature branch, with an honest `Co-Authored-By` trailer that names the **model**,
+   not only the harness, e.g. `Co-Authored-By: GPT-6.1 Sol (Copilot) <noreply@github.com>` or
+   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The reviewers are picked from the other model family
+   than the one that wrote the code; a trailer like `Co-authored-by: Copilot` alone says nothing about the model, so
+   both families review, the author's own included.
 2. `review-loop eot --ticket <ticket.md> --format text` (or `--intent "<one line>"`; default base is
    `origin/HEAD`, pass `--base <ref>` for an epic branch). It scans first, then a finder and a verifier from the other
    model family review `merge-base..HEAD` in a read-only scratch worktree.

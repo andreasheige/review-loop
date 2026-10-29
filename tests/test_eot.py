@@ -244,6 +244,17 @@ class EotTest(RepoCase):
         code, out = self.eot(fake)
         self.assertEqual((code, fake.prompts), (2, []), "no model saw it, so the rest is unreviewed: a human decides")
 
+    def test_author_family_comes_from_the_model_trailer_not_the_harness(self):
+        cases = [("Copilot <223556219+Copilot@users.noreply.github.com>", "unknown"),
+                 ("GPT-6.1 Sol (Copilot) <noreply@github.com>", "gpt"),
+                 ("Claude Sonnet 5.5 (Copilot) <noreply@github.com>", "claude")]
+        for trailer, family in cases:
+            with self.subTest(trailer=trailer):
+                self.git("reset", "-q", "--hard", self.base)
+                self.change(f"feat: add\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n"
+                            f"Co-authored-by: {trailer}")
+                self.assertEqual(eot.author_family(str(self.repo), self.base, "HEAD"), family)
+
     def test_docs_only_change_runs_no_model(self):
         self.write("docs/guide.md", "hi\n")
         self.commit("docs: guide")
