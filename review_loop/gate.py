@@ -3,7 +3,7 @@
 usage: review-loop gate <remote> [<url>] [--block]     (pre-push ref lines on stdin; the URL is what's asked)
 
 For each pushed ref that isn't a delete, scans the commits being pushed (`scan --policy`, D1–D3 plus the
-control-weakening classes and accepts; D2 also per pushed commit) and prints one text report per ref, with the accept command for every
+control-weakening classes and accepts; D2 also per pushed commit, merges included) and prints one text report per ref, with the accept command for every
 needs_human finding. The base is the remote's old sha from the hook's own stdin, or, for a new branch or a sha
 not present locally, the remote's default branch from `git ls-remote` — never a local tracking ref, which
 anything with write access to .git can forge. A remote with no refs yet (first push) scans every pushed commit.
@@ -26,12 +26,10 @@ import time
 from pathlib import Path
 
 from . import gitdiff, normalise, scan, unicode_check
-from . import policy as policy_classes
 from .secret_scan import state_dir
 from .tools import SAFE_PATH
 
 ZERO = re.compile(r"^0+$")
-MAX_COMMITS = 500  # per-commit D2 beyond this many pushed commits would blow the push-time budget
 SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 
 
@@ -107,16 +105,21 @@ def base_for(repo: str, remote: str, remote_sha: str) -> str | None:
 
 
 def intermediate_unicode(repo: str, base: str, head: str) -> list[dict]:
-    """D2 on each pushed commit: hidden Unicode added and removed again within one push is still published in
-    the history, and scan.run only sees the endpoint diff. D3 and the policy classes stay endpoint-only: a
-    lockfile or config change undone later in the push never reaches the pushed tree."""
-    commits = gitdiff.git(repo, "rev-list", "--reverse", "--no-merges", f"{base}..{head}").stdout.decode().split()
+    """D2 on each pushed commit, merges by their first-parent diff: hidden Unicode added and removed again
+    within one push is still published in the history, and scan.run only sees the endpoint diff. One
+    `git log -p` for the whole push, so there is no commit cap. D3 and the policy classes stay endpoint-only:
+    a lockfile or config change undone later in the push never reaches the pushed tree."""
+    out = gitdiff.git(repo, "log", "-p", "-U0", "--no-color", "--no-ext-diff", "--text", "--no-textconv", "-M",
+                      "--src-prefix=a/", "--dst-prefix=b/", "--diff-merges=first-parent", "--format=%x00%H",
+                      f"{base}..{head}").stdout
+    commits = [c.split(b"\n", 1) for c in out.split(b"\0") if c.strip()]
     if len(commits) < 2:
         return []
     found = []
-    for c in commits[:MAX_COMMITS]:
-        parent = gitdiff.git(repo, "rev-parse", "--verify", "--quiet", f"{c}^", check=False).stdout.decode().strip()
-        found += unicode_check.scan(policy_classes.text_lines(repo, False, parent or empty_root(repo), c, removed=False))
+    for sha, diff in (c if len(c) == 2 else (c[0], b"") for c in commits):
+        sha = sha.decode().strip()
+        lines = gitdiff.parse(diff)
+        found += unicode_check.scan({p: v for p, v in lines.items() if not gitdiff.is_binary(repo, f"{sha}:{p}")})
     return found
 
 

@@ -142,6 +142,22 @@ class GateTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("unicode", err)
 
+    def test_hidden_unicode_in_a_merge_resolution_is_found(self):
+        base = self.git("rev-parse", "HEAD")
+        self.commit("src/a.py", "a = 1\n")
+        self.git("switch", "-q", "-c", "side", base)
+        self.commit("src/b.py", "b = 1\n")
+        self.git("switch", "-q", "feat")
+        self.git("merge", "-q", "--no-ff", "--no-commit", "side")
+        (self.repo / "src/a.py").write_text("a = 1  # \u202e\n", encoding="utf-8")
+        self.git("add", "src/a.py")
+        self.git("commit", "-q", "-m", "merge side")
+        tip = self.commit("src/a.py", "a = 1\n")
+        self.mode_file.write_text("block\n")
+        rc, err = self.gate([f"refs/heads/feat {tip} refs/heads/feat {base}"])
+        self.assertEqual(rc, 1)
+        self.assertIn("unicode", err)
+
     def test_delete_is_skipped(self):
         sha = self.add_canary()
         self.mode_file.write_text("block\n")
