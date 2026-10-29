@@ -77,11 +77,10 @@ def state(done: list[dict]) -> dict[str, dict]:
     return out
 
 
-def lapsed(repo: str, findings: list[dict]) -> bool:
+def lapsed(f: dict, live: set) -> bool:
     """A finding an accept made advisory whose accept has since expired (or was removed)."""
-    live = {(a["finding_id"], a["rule_class"]) for a in accept.load(repo)}
-    return any(f["status"] == "advisory" and f.get("body", "").startswith("accepted until ")
-               and (f["id"], f.get("rule_class") or "review") not in live for f in findings)
+    return (f["status"] == "advisory" and f.get("body", "").startswith("accepted until ")
+            and (f["id"], f.get("rule_class") or "review") not in live)
 
 
 def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text=None, family=None,
@@ -106,15 +105,19 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
     done = [(r, d) for r, d in links if eot.completed(r)]
     eots = [i for i, (r, _) in enumerate(done) if r["command"] == "eot"]
     done = done[eots[-1]:] if eots else done  # a re-run eot (only allowed before any recheck) starts afresh
+    live = {(a["finding_id"], a["rule_class"]) for a in accept.load(repo)}
     if done and done[-1][0]["key"]["patch_id"] == pid:
         # same end state, but commits in between may add a secret and remove it again: D1 scans the history
         r, d = done[-1]
         sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=None, policy=True)
         # by id and status: an expired accept turns the same finding back from advisory
         if not sc.get("error") and {(f["id"], f["status"]) for f in sc["findings"]} <= {
-                (f["id"], f["status"]) for f in r["findings"]} and not lapsed(repo, r["findings"]):
+                (f["id"], f["status"]) for f in r["findings"]} and not any(lapsed(f, live) for f in r["findings"]):
             return {**r, "note": f"no change since round {r['round']}; its outcome stands"}, d
     latest = state([r for r, _ in done])
+    for k, f in latest.items():  # its accept is gone: open again, so a verifier looks at it once more
+        if lapsed(f, live):
+            latest[k] = {**f, "status": "blocking"}
     open_ = [f for f in latest.values() if f["status"] in OPEN]
     known = [known_entry(f) for f in latest.values() if f["status"] == "advisory"]
     n = (done[-1][0]["round"] if done else 0) + 1
