@@ -20,6 +20,12 @@ MAX_STORIES -> needs_human (ui-coverage), never a silent pass; a story whose scr
 intended, a human looks); anything already on base -> advisory, pre-existing (backlog). The result goes to
 <git-common-dir>/review-loop/<patch-id>/ui.json for the push gate (plan 7.5). Exit 0 pass, 1 block,
 2 needs_human, 3 error.
+
+Known limits (security review 2026-10-29): the Storybook build runs head's own .storybook config and addons
+unsandboxed, with this process's environment and the checkout's node_modules (linked, so writable); and axe runs
+in the page's main world, so a story can stub window.axe or document.activeElement. Against a hostile change that
+means a forged clean result; the push gate's scan and review checks still apply. Fix later: build in a sandbox
+with a scrubbed env and a read-only node_modules copy, pin axe-core's hash, run axe in an isolated world.
 """
 from __future__ import annotations
 
