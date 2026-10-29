@@ -41,7 +41,9 @@ def canary():
 
 
 def entropy_value():
-    return "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+    # letters and digits alternate, so no run of letters can form one of gitleaks' generic-rule stopwords
+    # (a random 32-char value sometimes did, and the generic-secret tests then flaked)
+    return "".join(secrets.choice(string.ascii_letters) + secrets.choice(string.digits) for _ in range(16))
 
 
 class FakeNet:
