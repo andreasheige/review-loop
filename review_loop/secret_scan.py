@@ -65,7 +65,8 @@ class Gitleaks:
             f.write(CONFIG)
         # an empty dir as --gitleaks-ignore-path: a repo's .gitleaksignore is a suppression, not ours to honour
         self.ignore_dir = tempfile.mkdtemp(prefix="review-loop-gl-ignore-")
-        mode = ["--staged"] if staged else ["--log-opts", f"{base}..{head}"]
+        # base None: every commit reachable from head (a repo's first sweep)
+        mode = ["--staged"] if staged else ["--log-opts", f"{base}..{head}" if base else head]
         cmd = [self.exe, "git", *mode, "--no-banner", "--log-level", "error", "--config", self.config,
                "--report-format", "json", "--report-path", "-", "--exit-code", "0", "--ignore-gitleaks-allow",
                "--gitleaks-ignore-path", self.ignore_dir, repo]
