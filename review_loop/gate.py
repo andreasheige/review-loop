@@ -1,9 +1,9 @@
 """review-loop gate: the pre-push scan. The global pre-push hook's one review-loop call.
 
-usage: review-loop gate <remote> [<url>] [--block]     (pre-push ref lines on stdin)
+usage: review-loop gate <remote> [<url>] [--block]     (pre-push ref lines on stdin; the URL is what's asked)
 
 For each pushed ref that isn't a delete, scans the commits being pushed (`scan --policy`, D1–D3 plus the
-control-weakening classes and accepts) and prints one text report per ref, with the accept command for every
+control-weakening classes and accepts; D2 also per pushed commit) and prints one text report per ref, with the accept command for every
 needs_human finding. The base is the remote's old sha from the hook's own stdin, or, for a new branch or a sha
 not present locally, the remote's default branch from `git ls-remote` — never a local tracking ref, which
 anything with write access to .git can forge. A remote with no refs yet (first push) scans every pushed commit.
@@ -25,11 +25,13 @@ import sys
 import time
 from pathlib import Path
 
-from . import gitdiff, scan
+from . import gitdiff, normalise, scan, unicode_check
+from . import policy as policy_classes
 from .secret_scan import state_dir
 from .tools import SAFE_PATH
 
 ZERO = re.compile(r"^0+$")
+MAX_COMMITS = 500  # per-commit D2 beyond this many pushed commits would blow the push-time budget
 SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 
 
@@ -94,12 +96,28 @@ def empty_root(repo: str) -> str:
 
 
 def base_for(repo: str, remote: str, remote_sha: str) -> str | None:
+    """remote is where the push goes: the hook's URL argument, so a remote.<name>.pushurl that differs from
+    the fetch URL is asked, not the fetch side."""
     if not ZERO.match(remote_sha) and has_commit(repo, remote_sha):
         return remote_sha
     default = remote_default(repo, remote)
     if default == EMPTY:
         return empty_root(repo)
     return default if default and has_commit(repo, default) else None
+
+
+def intermediate_unicode(repo: str, base: str, head: str) -> list[dict]:
+    """D2 on each pushed commit: hidden Unicode added and removed again within one push is still published in
+    the history, and scan.run only sees the endpoint diff. D3 and the policy classes stay endpoint-only: a
+    lockfile or config change undone later in the push never reaches the pushed tree."""
+    commits = gitdiff.git(repo, "rev-list", "--reverse", "--no-merges", f"{base}..{head}").stdout.decode().split()
+    if len(commits) < 2:
+        return []
+    found = []
+    for c in commits[:MAX_COMMITS]:
+        parent = gitdiff.git(repo, "rev-parse", "--verify", "--quiet", f"{c}^", check=False).stdout.decode().strip()
+        found += unicode_check.scan(policy_classes.text_lines(repo, False, parent or empty_root(repo), c, removed=False))
+    return found
 
 
 def run(repo: str, remote: str, stdin: str, block: bool = False) -> tuple[int, str]:
@@ -123,6 +141,10 @@ def run(repo: str, remote: str, stdin: str, block: bool = False) -> tuple[int, s
         if base == local_sha:
             continue
         out = scan.run(repo, False, f"{base}..{local_sha}", policy=True)
+        extra = intermediate_unicode(repo, base, local_sha)
+        if extra:
+            errors = [out["error"]] if out.get("error") else []
+            out = {**scan.result(normalise.merge(out["findings"] + extra), errors, out["tools"]), "policy": True}
         codes.append(out["exit_code"])
         classes += [f["rule_class"] for f in out["findings"] if f["status"] in ("hard", "needs_human")]
         if out["exit_code"]:
@@ -154,7 +176,7 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("usage: review-loop gate <remote> [<url>] [--block]   (pre-push ref lines on stdin)\n")
         return 3
     try:
-        code, text = run(".", args[0], sys.stdin.read(), "--block" in argv)
+        code, text = run(".", args[1] if len(args) > 1 else args[0], sys.stdin.read(), "--block" in argv)
     except Exception as e:  # noqa: BLE001 - a crash must not pass silently: warn or block like a tool error
         code, text = (1 if mode("--block" in argv) == "block" else 0), f"review-loop gate: internal error: {type(e).__name__}\n"
     sys.stderr.write(text)
