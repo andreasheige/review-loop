@@ -263,7 +263,9 @@ def branch_created(repo: str, br: str) -> str | None:
     if p.returncode or not lines:
         return None
     m = re.search(r"\{(.+)\}", lines[-1])
-    return datetime.fromisoformat(m.group(1)).astimezone(timezone.utc).isoformat(timespec="microseconds") if m else None
+    # git prints UTC as `Z`, which datetime.fromisoformat only reads from Python 3.11 on
+    stamp = m.group(1).replace("Z", "+00:00") if m else None
+    return datetime.fromisoformat(stamp).astimezone(timezone.utc).isoformat(timespec="microseconds") if m else None
 
 
 def chain(repo: str, common: Path, base: str, br: str | None, head: str) -> list[tuple[dict, Path]]:
