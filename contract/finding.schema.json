@@ -110,7 +110,7 @@
         "properties": {
           "evidence": {"properties": {"kind": {"const": "tool"}}},
           "introduced_by": {"const": "diff"},
-          "rule_class": {"enum": ["secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "sast", "workflow"]}
+          "rule_class": {"enum": ["secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "sast", "workflow", "a11y"]}
         }
       }
     },

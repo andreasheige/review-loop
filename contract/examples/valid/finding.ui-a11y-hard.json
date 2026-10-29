@@ -1,0 +1,22 @@
+{
+  "id": "sec-reviewloop-0123456789ab",
+  "reasoning": "axe-color-contrast at desktop/light",
+  "lens": "ui",
+  "surface": "code",
+  "title": "Elements must meet minimum color contrast ratio thresholds (color-contrast, serious, .btn) \u2014 new at desktop/light",
+  "sites": [
+    {
+      "path": "<story:button--primary>",
+      "start_line": 1,
+      "end_line": 1
+    }
+  ],
+  "failure_scenario": null,
+  "evidence": {
+    "kind": "tool",
+    "ref": "review-loop:axe-color-contrast"
+  },
+  "rule_class": "a11y",
+  "introduced_by": "diff",
+  "status": "hard"
+}

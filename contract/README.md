@@ -63,9 +63,22 @@ Stable across `--staged`, `--range` and rebase: no line number or commit SHA.
 $(git rev-parse --git-common-dir)/review-loop/      never committed
   <patch-id>/round-<n>/record.json                   record.schema.json
   <patch-id>/round-<n>/{sarif,prompts,repro}/        raw artifacts, scrubbed of secrets
+  <patch-id>/ui.json                                 `review-loop ui` result: {head, base, findings, outcome[, static]}
   accepts.jsonl                                      accept.schema.json, one per line
-  skips.log                                          REVIEW_LOOP_SKIP uses
+  sweep.json                                         last `review-loop sweep`: {ts, head, checks, ms} (report only)
+
+<state dir> = $REVIEW_LOOP_STATE_DIR or ~/.config/review-loop/state   (a protected path for agents)
+  gate.jsonl                                         one line per push: mode, exit, rule classes, ms, review states
+  skips.log                                          REVIEW_LOOP_SKIP uses (each confirmed at a terminal)
+  ui-optin.json                                      per remote: yes / not_now (7 days) / never, TTY only
+  machine-sweep.json                                 the weekly machine-wide sweep check
+~/.config/review-loop/gate-mode                      `block` turns the push gate from warn to block
+~/.config/review-loop/hooks-allow.txt                `<sha256> <name> <why>`: repo hooks a human has looked at
 ```
+
+The push gate counts a review record or UI result only for the exact pushed content: same patch-id, and the
+record's head has the pushed tree (a UI result also the same merge-base, and never a `--static` one). A patch-id
+alone ignores whitespace and context, so two different changes can share one.
 
 Rounds: `eot` is round 1, `recheck` rounds 2–3. The rounds of one ticket are chained by branch (a renamed branch keeps its chain; a name reused after a merge starts afresh). Known limits: the records are local files the agent under review can edit or delete, so the cap and the open findings hold against mistakes, not against a hostile agent (signing records with the local HMAC key is a possible later step); a copied branch (`git switch -c` from a ticket branch) starts a new chain; two branches with the same patch-id share `<patch-id>/round-<n>/`.
 
@@ -77,7 +90,8 @@ Keys: EOT records use the `-U0` patch-id against `origin/<base>` (`merge_base: n
 |---|---|---|
 | `~/.config/review-loop/config.toml` | Andreas only | security policy, roles → `{harness, model}`, per-remote vendor allow-list, rule classes and their block/warn mode |
 | `~/.config/review-loop/tools.lock` | Andreas only | scanner absolute paths, versions, sha256 |
-| `<repo>/.review-loop.toml` | repo | test/lint commands, protected test globs, base branch, `gate`/`ui` opt-ins, `vendors` restriction |
+| `<repo>/.review-loop.toml` | repo | test/lint commands, protected test globs, base branch, `vendors` restriction (planned: no TOML reader on Python 3.9 yet) |
+| `<repo>/.git/config` `review-loop.*` | Andreas | opt-ins, read with `--local` only: `gate` (review records at push), `ui-required` (UI result at push), `design-tokens` (lint), `sensitive` (personal-data line; ~/Knowit repos are sensitive anyway) |
 
 `.review-loop.toml` can only add strictness. Any change to it is itself NEEDS_HUMAN (`control-weakening`). So a repo can narrow `vendors` but never widen them. Allowing a new vendor for a client repo (e.g. OpenAI as the non-author family) is a global-config entry keyed by remote URL (Decision 8 in the plan).
 

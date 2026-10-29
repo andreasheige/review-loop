@@ -22,7 +22,7 @@ from . import scan
 from .gitdiff import GitError, git
 
 CLASSES = ("review", "secret", "unicode", "dep-nonexistent", "dep-mal", "dep-kev", "dep-young", "sast", "workflow",
-           "control-weakening")
+           "control-weakening", "dep-downgrade", "a11y", "ui-visual")
 MAX_DAYS = 90
 
 
@@ -66,12 +66,18 @@ def apply(repo: str, findings: list[dict]) -> list[dict]:
 
 
 def lookup(repo: str, finding_id: str, base_ref: str | None = None) -> dict | None:
-    """The finding as last seen: the newest eot/recheck record holding it, else a policy scan of the branch."""
+    """The finding as last seen: the newest eot/recheck record or UI result holding it, else a policy scan."""
     from . import eot
 
     top = git(repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
     common = Path(top, git(top, "rev-parse", "--git-common-dir").stdout.decode().strip())
     hits = [(r["created_at"], f) for r, _ in eot.records(common) for f in r["findings"] if f["id"] == finding_id]
+    for path in (common / "review-loop").glob("*/ui.json"):  # review-loop ui results (a11y, ui-visual)
+        try:
+            found = [f for f in json.loads(path.read_text()).get("findings", []) if f.get("id") == finding_id]
+        except (OSError, ValueError, AttributeError):
+            continue
+        hits += [(datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(), f) for f in found]
     if hits:
         return max(hits, key=lambda x: x[0])[1]
     base = git(top, "merge-base", base_ref or eot.default_base(top), "HEAD", check=False).stdout.decode().strip()

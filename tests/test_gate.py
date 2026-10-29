@@ -5,6 +5,8 @@ usage: python3 -m unittest tests.test_gate -v      (from the repo root)
 Each case has a work repo and a bare `origin`, both with GIT_CONFIG_GLOBAL=/dev/null so no global hook runs.
 The gate gets the pre-push stdin lines the test builds, as git would hand them to the hook.
 """
+import datetime
+import io
 import json
 import os
 import shutil
@@ -12,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 from pathlib import Path
 
@@ -288,6 +291,28 @@ class GateTest(unittest.TestCase):
         self.ui_result(sha, [{"id": "sec-reviewloop-aaaaaaaaaaaa", "status": "hard", "rule_class": "a11y"}], 1)
         self.mode_file.write_text("block\n")
         self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])[0], 1)
+
+    def test_accepting_an_intended_visual_change_lets_the_push_through(self):
+        self.git("config", "review-loop.ui-required", "true")
+        sha = self.commit("src/Button.tsx", "export const B = 1;\n")
+        fid = "sec-reviewloop-bbbbbbbbbbbb"
+        self.ui_result(sha, [{"id": fid, "status": "needs_human", "rule_class": "ui-visual", "title": "looks different",
+                              "lens": "ui", "sites": [{"path": "<story:b>", "start_line": 1, "end_line": 1}]}], 2)
+        self.mode_file.write_text("block\n")
+        line = [f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]
+        self.assertEqual(self.gate(line)[0], 1)
+        expires = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+        with mock.patch.dict(os.environ, self.env, clear=True), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            cwd = os.getcwd()
+            os.chdir(self.repo)
+            try:
+                from review_loop import accept
+                code = accept.main([fid, "--rule-class", "ui-visual", "--reason", "new weather card, intended",
+                                    "--expires", expires], confirm=lambda q: True)
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.gate(line), (0, ""))
 
     def test_static_ui_result_does_not_count(self):
         self.git("config", "review-loop.ui-required", "true")
