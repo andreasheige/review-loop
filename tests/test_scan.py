@@ -277,6 +277,16 @@ class ScanTest(unittest.TestCase):
         self.write("package-lock.json", npm_lock([("lodash", "4.17.21")]))
         self.assertEqual([f for f in self.scan_inproc(FakeNet())["findings"] if f["rule_class"] == "dep-downgrade"], [])
 
+    def test_nested_older_copy_and_prerelease_to_release_are_not_downgrades(self):
+        lock = lambda extra: npm_lock([("lodash", "4.17.21"), ("vite", "2.0.0-rc.1")] + extra)
+        self.write("package-lock.json", lock([]))
+        self.commit("lock")
+        text = json.loads(npm_lock([("lodash", "4.17.21"), ("vite", "2.0.0")]))
+        text["packages"]["node_modules/foo/node_modules/lodash"] = {
+            "version": "3.10.1", "resolved": "https://registry.npmjs.org/lodash/-/lodash-3.10.1.tgz"}
+        self.write("package-lock.json", json.dumps(text, indent=2) + "\n")
+        self.assertEqual([f for f in self.scan_inproc(FakeNet())["findings"] if f["rule_class"] == "dep-downgrade"], [])
+
     def test_deps_timeout_alone_is_needs_human(self):
         self.write("package-lock.json", npm_lock([("slow-pkg", "2.0.0")]))
         out = self.scan_inproc(FakeNet())

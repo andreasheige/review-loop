@@ -84,6 +84,20 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(second["hits"], [])
         self.assertNotEqual(second["range"], "all history")
 
+    def test_failed_gitleaks_run_is_covered_by_the_next_sweep(self):
+        c = canary()
+        self.secrets.append(c)
+        self.commit("src/x.ts", "".join(f"export const v{i} = {i};\n" for i in range(20)) + f'export const t = "{c}";\n')
+        lock = Path(self.env["REVIEW_LOOP_TOOLS_LOCK"])
+        good = lock.read_text()
+        lock.write_text("")  # gitleaks unpinned: the check errors
+        self.sweep()
+        self.assertEqual(self.result()["checks"]["gitleaks"]["status"], "error")
+        lock.write_text(good)
+        self.sweep()
+        g = self.result()["checks"]["gitleaks"]
+        self.assertEqual(([h["path"] for h in g["hits"]], g["range"]), (["src/x.ts"], "all history"))
+
     def test_client_repo_without_offline_db_skips_osv(self):
         self.sweep()
         self.assertEqual(self.result()["checks"]["osv"]["status"], "skipped")
