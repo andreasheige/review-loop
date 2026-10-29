@@ -11,6 +11,10 @@ Checks, each recorded with its own status (ok, findings, skipped, error):
   hooks      executables in the repo's hooks dir whose sha256 isn't in ~/.config/review-loop/hooks-allow.txt
              (`<sha256> <name> <why>` per line, written by a human: a protected path for agents), and a
              repo-local core.hooksPath (it turns the global hooks off for that repo)
+  image      repos with a Dockerfile: the newest `trivy-report` artifact of the repo's CI (Azure DevOps via `az`,
+             GitHub via `gh api`), its vulnerabilities minus those osv already lists for the same (package, id);
+             an empty or unreadable report is an error (a scan that writes nothing passes silently otherwise);
+             no Dockerfile -> not_applicable
   sast       skipped until there are own Semgrep rules (Decision 7)
   machine    at most once per 7 days: the global core.hooksPath still points at the global hooks dir
 
@@ -26,7 +30,10 @@ import json
 import os
 import subprocess
 import sys
+import re
+import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 from . import deps, gitdiff
@@ -112,11 +119,131 @@ def check_osv(repo: str) -> dict:
     for res in report.get("results") or []:
         source = os.path.relpath(res.get("source", {}).get("path", ""), repo)
         for pk in res.get("packages") or []:
-            ids = sorted(v["id"] for v in pk.get("vulnerabilities") or [])
+            found = pk.get("vulnerabilities") or []
+            ids = sorted(v["id"] for v in found)
             if ids:
+                aliases = sorted({a for v in found for a in v.get("aliases") or []} - set(ids))
                 vulns.append({"package": pk["package"]["name"], "version": pk["package"].get("version"),
-                              "ecosystem": pk["package"].get("ecosystem"), "lockfile": source, "ids": ids})
+                              "ecosystem": pk["package"].get("ecosystem"), "lockfile": source, "ids": ids,
+                              "aliases": aliases})
     return {"status": "findings" if vulns else "ok", "tool": f"osv-scanner@{version}", "online": online, "vulns": vulns}
+
+
+# Which repos get an image check: a Dockerfile within 4 levels, outside dependency/vendor dirs.
+SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "dist", "build"}
+ADO = re.compile(r"(?:dev\.azure\.com/([^/]+)/([^/]+)/_git/([^/?#]+)|ssh\.dev\.azure\.com:v3/([^/]+)/([^/]+)/([^/?#]+))")
+GITHUB = re.compile(r"github\.com[:/]([^/]+)/([^/.]+?)(?:\.git)?$")
+ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"  # Azure DevOps, for `az rest`
+
+
+def dockerfiles(repo: str) -> list[str]:
+    out = []
+    for root, dirs, files in os.walk(repo):
+        depth = Path(root).relative_to(repo).parts
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and len(depth) < 4]
+        out += [os.path.relpath(Path(root, f), repo) for f in files if f == "Dockerfile" or f.startswith("Dockerfile.")]
+    return sorted(out)
+
+
+def parse_trivy(raw: bytes, osv_vulns: list[dict]) -> dict:
+    """Trivy JSON -> {status, vulns, deduped}; an empty or unreadable report is an error."""
+    if not raw.strip():
+        return {"status": "error", "error": "trivy-report is empty (the scan step wrote nothing)"}
+    try:
+        report = json.loads(raw)
+    except ValueError:
+        return {"status": "error", "error": "trivy-report is not JSON"}
+    known = {(v["package"], i) for v in osv_vulns for i in v["ids"] + v.get("aliases", [])}
+    vulns, deduped = [], 0
+    for res in report.get("Results") or []:
+        for v in res.get("Vulnerabilities") or []:
+            key = (v.get("PkgName"), v.get("VulnerabilityID"))
+            if key in known:
+                deduped += 1
+                continue
+            vulns.append({"package": key[0], "version": v.get("InstalledVersion"), "id": key[1],
+                          "severity": v.get("Severity"), "fixed": v.get("FixedVersion") or None, "target": res.get("Target")})
+    by_severity = {}
+    for v in vulns:
+        by_severity[v["severity"]] = by_severity.get(v["severity"], 0) + 1
+    return {"status": "findings" if vulns else "ok", "vulns": vulns, "by_severity": by_severity, "deduped": deduped}
+
+
+def az(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
+    return run_tool(["az", *args], os.getcwd(), timeout=timeout)
+
+
+def fetch_ado(org: str, project: str, name: str) -> tuple[bytes | None, str]:
+    """(newest trivy-report.json of the repo's pipelines, run label) via az; az attaches the token itself."""
+    base = ["--detect", "false", "--org", f"https://dev.azure.com/{org}", "--project", project]
+    p = az("pipelines", "list", *base, "--query", "[].id", "-o", "json")
+    runs = []
+    for pid in json.loads(p.stdout or b"[]") if p.returncode == 0 else []:
+        show = az("pipelines", "show", *base, "--id", str(pid), "--query", "repository.name", "-o", "tsv")
+        if show.stdout.decode().strip() != name:
+            continue
+        r = az("pipelines", "runs", "list", *base, "--pipeline-ids", str(pid), "--top", "5", "--query",
+               "[?result=='succeeded'].{id:id, finish:finishTime}", "-o", "json")
+        runs += json.loads(r.stdout or b"[]") if r.returncode == 0 else []
+    for run in sorted(runs, key=lambda r: r["finish"] or "", reverse=True):
+        a = az("pipelines", "runs", "artifact", "list", *base, "--run-id", str(run["id"]), "--query",
+               "[?name=='trivy-report'].resource.downloadUrl | [0]", "-o", "tsv")
+        url = a.stdout.decode().strip()
+        if not url or a.returncode:
+            continue
+        with tempfile.TemporaryDirectory(prefix="review-loop-trivy-") as tmp:
+            z = Path(tmp, "a.zip")
+            d = az("rest", "--method", "get", "--url", url, "--resource", ADO_RESOURCE, "--output-file", str(z), timeout=120)
+            if d.returncode or not z.is_file():
+                raise ToolError(f"downloading trivy-report of run {run['id']} failed")
+            return report_from_zip(z), f"ado run {run['id']} ({(run['finish'] or '')[:10]})"
+    return None, "no succeeded run with a trivy-report artifact"
+
+
+def fetch_github(owner: str, name: str) -> tuple[bytes | None, str]:
+    p = run_tool(["gh", "api", f"repos/{owner}/{name}/actions/artifacts?name=trivy-report&per_page=5"], os.getcwd())
+    arts = [a for a in (json.loads(p.stdout or b"{}").get("artifacts") or []) if not a.get("expired")] if p.returncode == 0 else []
+    if not arts:
+        return None, "no trivy-report artifact"
+    newest = max(arts, key=lambda a: a["created_at"])
+    with tempfile.TemporaryDirectory(prefix="review-loop-trivy-") as tmp:
+        z = Path(tmp, "a.zip")
+        d = run_tool(["gh", "api", f"repos/{owner}/{name}/actions/artifacts/{newest['id']}/zip"], os.getcwd(), timeout=120)
+        if d.returncode:
+            raise ToolError("downloading the trivy-report artifact failed")
+        z.write_bytes(d.stdout)
+        return report_from_zip(z), f"github artifact {newest['id']} ({newest['created_at'][:10]})"
+
+
+def report_from_zip(z: Path) -> bytes:
+    with zipfile.ZipFile(z) as zf:
+        names = [n for n in zf.namelist() if n.endswith(".json")]
+        return zf.read(names[0]) if names else b""
+
+
+def check_image(repo: str, osv: dict) -> dict:
+    files = dockerfiles(repo)
+    if not files:
+        return {"status": "not_applicable", "why": "no Dockerfile"}
+    origin = gitdiff.origin(repo) or ""
+    try:
+        if m := ADO.search(origin):
+            org, project, name = [g for g in m.groups() if g is not None]
+            raw, source = fetch_ado(org, urllib_unquote(project), urllib_unquote(name))
+        elif m := GITHUB.search(origin):
+            raw, source = fetch_github(*m.groups())
+        else:
+            return {"status": "skipped", "why": "origin is neither Azure DevOps nor GitHub", "dockerfiles": files}
+    except (ToolError, OSError, ValueError, zipfile.BadZipFile, subprocess.TimeoutExpired) as e:
+        return {"status": "error", "error": str(e), "dockerfiles": files}
+    if raw is None:
+        return {"status": "findings", "why": f"Dockerfile but {source}", "dockerfiles": files, "vulns": []}
+    return {**parse_trivy(raw, osv.get("vulns", [])), "source": source, "dockerfiles": files}
+
+
+def urllib_unquote(s: str) -> str:
+    from urllib.parse import unquote
+    return unquote(s)
 
 
 def check_gitleaks(repo: str, since: str | None, head: str) -> dict:
@@ -213,11 +340,13 @@ def sweep(repo: str) -> dict:
     common = common_dir(repo)
     head = gitdiff.git(repo, "rev-parse", "HEAD", check=False).stdout.decode().strip()
     last = last_sweep(common) or {}
+    osv = check_osv(repo)
     checks = {
-        "osv": check_osv(repo),
+        "osv": osv,
         "gitleaks": check_gitleaks(repo, last.get("head"), head) if head else {"status": "skipped", "why": "no commits"},
         "workflows": check_workflows(repo),
         "hooks": check_hooks(repo, common),
+        "image": check_image(repo, osv),
         "sast": {"status": "skipped", "why": "no own Semgrep rules yet (Decision 7)"},
     }
     machine = check_machine()
@@ -235,7 +364,10 @@ def sweep(repo: str) -> dict:
 def counts(result: dict) -> dict:
     c = result.get("checks", {})
     return {"osv": len(c.get("osv", {}).get("vulns", [])), "gitleaks": len(c.get("gitleaks", {}).get("hits", [])),
-            "workflows": len(c.get("workflows", {}).get("items", [])), "hooks": len(c.get("hooks", {}).get("unknown", []))
+            "workflows": len(c.get("workflows", {}).get("items", [])),
+            "image": c.get("image", {}).get("status", "-") if c.get("image", {}).get("status") != "findings"
+            else len(c["image"].get("vulns", [])) or "no report",
+            "hooks": len(c.get("hooks", {}).get("unknown", []))
             + bool(c.get("hooks", {}).get("local_hooks_path")),
             "errors": sum(1 for v in c.values() if isinstance(v, dict) and v.get("status") == "error")}
 
@@ -250,14 +382,14 @@ def repos_under(roots: list[Path]):
 
 
 def digest(roots: list[Path]) -> str:
-    lines = ["repo\tlast sweep\tosv\tgitleaks\tworkflows\thooks\terrors"]
+    lines = ["repo\tlast sweep\tosv\tgitleaks\tworkflows\timage\thooks\terrors"]
     for repo in repos_under(roots):
         last = last_sweep(repo / ".git")
         if not last:
-            lines.append(f"{repo}\tnever\t\t\t\t\t")
+            lines.append(f"{repo}\tnever\t\t\t\t\t\t")
             continue
         c = counts(last)
-        lines.append(f"{repo}\t{last['ts'][:10]}\t{c['osv']}\t{c['gitleaks']}\t{c['workflows']}\t{c['hooks']}\t{c['errors']}")
+        lines.append(f"{repo}\t{last['ts'][:10]}\t{c['osv']}\t{c['gitleaks']}\t{c['workflows']}\t{c['image']}\t{c['hooks']}\t{c['errors']}")
     return "\n".join(lines) + "\n"
 
 
@@ -292,5 +424,5 @@ def main(argv: list[str]) -> int:
         result = sweep(repo)
     c = counts(result)
     sys.stdout.write(f"review-loop sweep {result['repo']}: osv {c['osv']}, gitleaks {c['gitleaks']}, workflows "
-                     f"{c['workflows']}, hooks {c['hooks']}, errors {c['errors']} ({result['ms']} ms)\n")
+                     f"{c['workflows']}, image {c['image']}, hooks {c['hooks']}, errors {c['errors']} ({result['ms']} ms)\n")
     return 0

@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from review_loop import sweep
 from tests.test_scan import BIN, GITLEAKS_ROW, canary
 
 
@@ -120,6 +121,29 @@ class SweepTest(unittest.TestCase):
         (self.repo / ".git/review-loop/sweep.lock").touch()
         self.assertEqual(self.sweep("--if-due"), "")
         self.assertFalse((self.repo / ".git/review-loop/sweep.json").exists())
+
+    def test_image_not_applicable_without_dockerfile(self):
+        self.sweep()
+        self.assertEqual(self.result()["checks"]["image"]["status"], "not_applicable")
+
+    def test_image_skipped_for_an_unknown_ci_host(self):
+        self.git("remote", "set-url", "origin", "https://git.example.invalid/x/app.git")
+        self.commit("svc/Dockerfile", "FROM scratch\n")
+        self.sweep()
+        image = self.result()["checks"]["image"]
+        self.assertEqual((image["status"], image["dockerfiles"]), ("skipped", ["svc/Dockerfile"]))
+
+    def test_trivy_report_parsed_and_deduped_with_osv(self):
+        report = {"Results": [{"Target": "app (alpine 3.19)", "Vulnerabilities": [
+            {"PkgName": "openssl", "InstalledVersion": "3.1.0", "VulnerabilityID": "CVE-2026-0001", "Severity": "HIGH",
+             "FixedVersion": "3.1.1"},
+            {"PkgName": "lodash", "InstalledVersion": "4.17.15", "VulnerabilityID": "CVE-2020-8203", "Severity": "HIGH"}]}]}
+        osv = [{"package": "lodash", "ids": ["GHSA-p6mc-m468-83gw"], "aliases": ["CVE-2020-8203"]}]
+        got = sweep.parse_trivy(json.dumps(report).encode(), osv)
+        self.assertEqual((got["status"], got["deduped"], got["by_severity"]), ("findings", 1, {"HIGH": 1}))
+        self.assertEqual(got["vulns"][0]["id"], "CVE-2026-0001")
+        self.assertEqual(sweep.parse_trivy(b"", [])["status"], "error")
+        self.assertEqual(sweep.parse_trivy(b'{"Results": []}', [])["status"], "ok")
 
     def test_digest_lists_last_sweep_dates(self):
         other = self.tmp / "other"
