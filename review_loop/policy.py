@@ -58,20 +58,20 @@ def hit(rule: str, path: str, line: int, title: str, k: str, surface: str = "cod
                              ref=f"review-loop:{rule}")
 
 
-def changed(repo: str, staged: bool, base: str | None, head: str | None) -> list[tuple[str, str, str]]:
-    """(path, new mode, status) for every change, renames split into delete + add."""
+def changed(repo: str, staged: bool, base: str | None, head: str | None) -> list[tuple[str, str, str, str]]:
+    """(path, new mode, status, new object id) for every change, renames split into delete + add."""
     out = gitdiff.git(repo, "diff", "--raw", "-z", "--no-renames", "--no-abbrev",
                       *gitdiff.diff_args(staged, base, head)).stdout.decode("utf-8", "replace").split("\0")
     res = []
     for meta, path in zip(out[0::2], out[1::2]):
         parts = meta.lstrip(":").split()
         if len(parts) >= 5:
-            res.append((path, parts[1], parts[4][:1]))
+            res.append((path, parts[1], parts[4][:1], parts[3]))
     return res
 
 
 def changed_paths(repo: str, staged: bool, base: str | None, head: str | None) -> list[str]:
-    return [p for p, _, _ in changed(repo, staged, base, head)]
+    return [c[0] for c in changed(repo, staged, base, head)]
 
 
 def is_test(path: str) -> bool:
@@ -88,11 +88,12 @@ def text_lines(repo: str, staged: bool, base: str | None, head: str | None, remo
 def scan(repo: str, staged: bool, base: str | None, head: str | None) -> list[dict]:
     out = []
     side = "" if staged else head
-    for path, mode, status in changed(repo, staged, base, head):
+    for path, mode, status, oid in changed(repo, staged, base, head):
+        # keyed on the target blob / commit, so an accept doesn't cover a later repoint
         if status != "D" and mode == "120000":
-            out.append(hit("symlink", path, 1, f"Symlink added or changed: {path}", mode))
+            out.append(hit("symlink", path, 1, f"Symlink added or changed: {path}", oid))
         elif status != "D" and mode == "160000":
-            out.append(hit("submodule", path, 1, f"Submodule pointer added or changed: {path}", mode))
+            out.append(hit("submodule", path, 1, f"Submodule pointer added or changed: {path}", oid))
         for rule, rx in CONFIG:
             if rx.search(path):
                 blob = "deleted" if status == "D" else gitdiff.git(repo, "rev-parse", f"{side}:{path}").stdout.decode().strip()

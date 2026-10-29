@@ -7,6 +7,7 @@ with GIT_CONFIG_GLOBAL=/dev/null. Canary values are generated at runtime and nev
 """
 import io
 import json
+from datetime import date, timedelta
 import os
 import secrets
 import shutil
@@ -227,6 +228,21 @@ class EotTest(RepoCase):
         self.assertNotIn(v, json.dumps(out))
 
     # ---------------------------------------------------------------- eligibility and key
+
+    def test_accepted_secret_still_needs_a_human_for_the_unreviewed_code(self):
+        from review_loop import accept, scan
+        self.change()
+        self.write("src/x.ts", f'const k = "{canary()}";\n')
+        self.commit("feat: x")
+        fid = next(f["id"] for f in scan.run(str(self.repo), staged=False, rng=f"{self.base}..HEAD", policy=True)[
+            "findings"] if f["rule_class"] == "secret")
+        store = accept.store(str(self.repo))
+        store.parent.mkdir(parents=True, exist_ok=True)
+        store.write_text(json.dumps({"finding_id": fid, "rule_class": "secret", "reason": "a test value only",
+                                     "tty": True, "expires": (date.today() + timedelta(days=5)).isoformat()}) + "\n")
+        fake = FakeClaude({"findings": [], "reviewed_paths": ["src/calc.py", "src/x.ts"]})
+        code, out = self.eot(fake)
+        self.assertEqual((code, fake.prompts), (2, []), "no model saw it, so the rest is unreviewed: a human decides")
 
     def test_docs_only_change_runs_no_model(self):
         self.write("docs/guide.md", "hi\n")

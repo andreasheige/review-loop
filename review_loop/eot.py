@@ -202,7 +202,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
         "head": head, "branch": branch(repo), "author_family": family, "intent_source": source, "workers": [], "tools": {},
         "reviewed_paths": [], "findings": [],
     }
-    error = None
+    error, stopped = None, False
     try:
         sc = scan.run(repo, staged=False, rng=f"{base}..{head}", sarif=str(round_dir / "scan.sarif"), policy=True)
         record["tools"] = sc["tools"]
@@ -217,19 +217,24 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", *, ticket=None, intent_text
             record["findings"] += review(repo, base, head, text, eligible, deleted, diff_paths, finders, verifiers,
                                          round_dir, record, runner)
     except StopReview:
-        pass
+        stopped = True
     except (EotError, workers.WorkerError, GitError, OSError) as e:
         error = str(e)
     except Exception as e:  # noqa: BLE001 - an unexpected crash is exit 3 with a record, never 0
         error = f"internal error: {type(e).__name__}"
     record["findings"] = accept.apply(repo, record["findings"])  # a review accept only matches a rev- finding
-    record["outcome"] = outcome(record["findings"], error)
+    record["outcome"] = never_pass_unreviewed(outcome(record["findings"], error), stopped)
     write(round_dir / "record.json", record)
     return record, round_dir
 
 
 class StopReview(Exception):
     pass
+
+
+def never_pass_unreviewed(o: dict, stopped: bool) -> dict:
+    """D1 stopped the models: even with the secret accepted, the rest of the diff is unreviewed, so a human decides."""
+    return {"exit_code": 2, "summary": "needs_human"} if stopped and o["exit_code"] == 0 else o
 
 
 def branch(repo: str) -> str | None:
