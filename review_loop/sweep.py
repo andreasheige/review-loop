@@ -103,7 +103,7 @@ def run_tool(argv: list[str], cwd: str, timeout: int = 120) -> subprocess.Comple
 
 
 def check_osv(repo: str) -> dict:
-    online = deps.is_online(gitdiff.origin(repo))
+    online = deps.is_online(gitdiff.origin(repo), repo)
     try:
         exe, version = resolve("osv-scanner")
     except ToolError as e:

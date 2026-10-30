@@ -47,6 +47,23 @@ class OwnerTest(unittest.TestCase):
             self.assertTrue(eot.sensitive(str(clients / "acme")))
             self.assertFalse(eot.sensitive(str(self.tmp)))
 
+    def test_unreadable_client_roots_fail_closed(self):
+        (self.cfg / "client-roots.txt").mkdir()  # exists, but reading it fails
+        self.assertTrue(owner.in_client_root(str(self.tmp)))
+        self.assertEqual(owner.client_roots(), [])
+        with mock.patch.object(eot, "git") as git:
+            git.return_value.stdout = b"false\n"
+            self.assertTrue(eot.sensitive(str(self.tmp)))
+        self.assertFalse(deps.is_online(None, str(self.tmp)))
+
+    def test_client_root_stays_offline_even_with_an_own_origin(self):
+        clients = self.tmp / "clients"
+        (clients / "fork").mkdir(parents=True)
+        (self.cfg / "owner-origins.txt").write_text("github.com/me/\n")
+        (self.cfg / "client-roots.txt").write_text(f"{clients}\n")
+        self.assertFalse(deps.is_online("git@github.com:me/fork.git", str(clients / "fork")))
+        self.assertTrue(deps.is_online("git@github.com:me/fork.git", str(self.tmp)))
+
 
 if __name__ == "__main__":
     unittest.main()
