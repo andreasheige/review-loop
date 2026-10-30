@@ -7,6 +7,7 @@
        review-loop sweep [--if-due] [--repo DIR] | --digest [ROOT]...   (whole-repo checks, report only)
        review-loop ui [--base REF] [--rev REV]   (UI lens: axe, keyboard, screenshots, base vs head)
        review-loop risk [--base REF] [--rev REV] [--format text|json|md]   (low / medium / high review effort)
+       review-loop land <pr>   (merge a PR only if it is risk:low, reviewed clean and green; else refuse)
        review-loop gate <remote> [<url>] [--block]   (pre-push ref lines on stdin)
        review-loop accept <finding-id> --reason TEXT [--expires YYYY-MM-DD] [--rule-class CLASS]   (needs a terminal)
        review-loop worker --harness claude|codex --role find|verify --model M --input FILE [--repo DIR] [--rev REV]"""
@@ -15,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-COMMANDS = ("scan", "eot", "recheck", "risk", "gate", "sweep", "ui", "label", "stats", "accept", "worker")
+COMMANDS = ("scan", "eot", "recheck", "risk", "land", "gate", "sweep", "ui", "label", "stats", "accept", "worker")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
@@ -41,6 +42,9 @@ if __name__ == "__main__":
     if sys.argv[1] == "risk":
         from review_loop import risk
         sys.exit(risk.main(sys.argv[2:]))
+    if sys.argv[1] == "land":
+        from review_loop import land
+        sys.exit(land.main(sys.argv[2:]))
     if sys.argv[1] == "gate":
         from review_loop import gate
         sys.exit(gate.main(sys.argv[2:]))

@@ -27,6 +27,10 @@ CLI: `$REVIEW_LOOP_BIN`, else `review-loop` on `PATH`, else `~/Dev/review-loop/b
      open. Don't start a fresh `eot` to get around it (it is refused on a branch that has rechecks).
    - `3` — stop and report the error. A failed review never counts as a pass.
 4. Before pushing (after any rebase): `review-loop recheck` again. With an unchanged patch-id it only rescans.
+5. Opening the PR: put `review-loop risk --format md` in the PR body (how much review it needs: low, medium or high,
+   decided in code). Then `review-loop land <pr>`: it merges only a risk:low PR that is reviewed clean and green, and
+   otherwise refuses with the reasons. On a refusal, stop and give the user the PR link: they merge. Never run
+   `gh pr merge` yourself (the guard denies it), and never add a `risk:` label by hand.
 
 Never edit, delete or write anything under `$(git rev-parse --git-common-dir)/review-loop/`.
 
