@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from review_loop import eot, land
+from tests.test_scan import GITLEAKS_ROW, canary
 
 
 class FakeGh:
@@ -47,7 +48,8 @@ class LandTest(unittest.TestCase):
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True)
         self.repo.mkdir()
         self.git("init", "-q", "-b", "main")
-        self.git("remote", "add", "origin", str(self.origin))
+        self.git("config", f"url.{self.origin}.insteadOf", "https://github.com/o/r")
+        self.git("remote", "add", "origin", "https://github.com/o/r")
         self.commit("README.md", "# fixture\n")
         self.git("push", "-q", "origin", "main")
         self.git("switch", "-q", "-c", "feat")
@@ -79,11 +81,12 @@ class LandTest(unittest.TestCase):
         return sha
 
     def pr(self, sha, **kw):
-        return {"number": 7, "state": "OPEN", "isDraft": False, "mergeable": "MERGEABLE", "baseRefName": "main",
+        return {"number": 7, "url": "https://github.com/o/r/pull/7", "isCrossRepository": False,
+                "state": "OPEN", "isDraft": False, "mergeable": "MERGEABLE", "baseRefName": "main",
                 "headRefName": "feat", "headRefOid": sha, "statusCheckRollup": [], "labels": [], **kw}
 
-    def land(self, gh):
-        return land.run(str(self.repo), "7", gh=gh)
+    def land(self, gh, scan=None):
+        return land.run(str(self.repo), "7", gh=gh, scan_fn=scan or (lambda repo, rng: {"exit_code": 0, "findings": []}))
 
     def test_low_risk_pr_lands_pinned_to_its_head(self):
         sha = self.pushed("docs/guide.md", "# Guide\n")
@@ -163,6 +166,51 @@ class LandTest(unittest.TestCase):
         code, msg = self.land(gh)
         self.assertEqual(code, 3)
         self.assertIn("push it first", msg)
+        self.assertEqual(gh.merged(), [])
+
+    def test_pr_in_another_repository_is_refused(self):
+        sha = self.pushed("docs/guide.md", "# Guide\n")
+        for extra in ({"url": "https://github.com/someone/r/pull/7"}, {"isCrossRepository": True}):
+            with self.subTest(extra=extra):
+                gh = FakeGh(self.pr(sha, **extra))
+                self.assertEqual(self.land(gh)[0], 3)
+                self.assertEqual(gh.merged(), [])
+
+    def test_history_scan_of_the_pr_commits_must_pass(self):
+        sha = self.pushed("docs/guide.md", "# Guide\n")
+        seen = []
+
+        def scan(repo, rng):
+            seen.append(rng)
+            return {"exit_code": 1, "findings": [{"id": "sec-x", "status": "hard", "rule_class": "secret"}]}
+        gh = FakeGh(self.pr(sha))
+        code, msg = self.land(gh, scan)
+        self.assertEqual(code, 1)
+        self.assertIn("scan", msg)
+        self.assertTrue(seen and seen[0].endswith(f"..{sha}"))
+        self.assertEqual(gh.merged(), [])
+
+        def broken(repo, rng):
+            raise RuntimeError("gitleaks missing")
+        self.assertEqual(self.land(FakeGh(self.pr(sha)), broken)[0], 3)
+
+    @unittest.skipUnless(GITLEAKS_ROW, "gitleaks not pinned in ~/.config/review-loop/tools.lock")
+    def test_real_scan_finds_a_secret_added_and_removed_in_the_pr(self):
+        lock = self.tmp / "tools.lock"
+        lock.write_text(GITLEAKS_ROW + "\n")
+        os.environ["REVIEW_LOOP_TOOLS_LOCK"] = str(lock)
+        c = canary()
+        self.commit("src/x.ts", "".join(f"export const v{i} = {i};\n" for i in range(20)) + f'export const t = "{c}";\n')
+        self.commit("src/x.ts", "export const v = 1;\n")
+        self.git("rm", "-q", "src/x.ts")
+        self.git("commit", "-q", "-m", "drop x")
+        sha = self.pushed("docs/guide.md", "# Guide\n")
+        gh = FakeGh(self.pr(sha))
+        code, msg = land.run(str(self.repo), "7", gh=gh)
+        self.assertEqual(code, 1, msg)
+        self.assertIn("scan of the PR commits", msg)
+        self.assertNotIn("risk:", msg)  # net diff is docs only: the scan is what stops it
+        self.assertNotIn(c, msg)
         self.assertEqual(gh.merged(), [])
 
     def test_head_not_on_the_remote_is_an_error(self):
