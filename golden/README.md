@@ -30,6 +30,10 @@ synthetic/build.sh /tmp/golden-synthetic     # fresh directory; prints "<name> <
 
 Builds one two-commit repo per case. Fixed names, emails, dates and an empty global git config make the SHAs reproducible, and `repo` is `synthetic:<name>`. The bidi/zero-width characters are written with `printf` escapes, never as literal characters.
 
+## Toy epic
+
+`epic/` holds a synthetic three-ticket epic with four cross-ticket bugs and a clean twin, for scoring an epic-level reviewer. See `epic/README.md`.
+
 ## Verify
 
 ```sh
