@@ -222,7 +222,7 @@ class EotTest(RepoCase):
         subprocess.run(["git", "switch", "-q", "-c", "utc-branch"], cwd=self.repo, env=env, check=True)
         self.assertTrue(eot.branch_created(str(self.repo), "utc-branch").endswith("+00:00"))
 
-    # security lens (plan 6.1)
+    # security lens
     def test_scanner_hits_reach_the_finder_as_hints(self):
         self.write("src/calc.py", "def add(a, b):\n    return a + b  # \u202e\n")
         self.commit("feat: add")

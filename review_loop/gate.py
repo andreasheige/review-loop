@@ -12,7 +12,7 @@ No base at all (unreachable remote, commits not fetched) is a tool error.
 Mode: warn (default) prints and exits 0; block exits 1 on any block, needs_human or tool error. Block comes
 from ~/.config/review-loop/gate-mode holding `block` (or anything unreadable or unknown: fail closed), from --block,
 or from REVIEW_LOOP_GATE_MODE_FILE; none of them can make another one weaker.
-Review records (plan 6.6), only in repos with `git config review-loop.gate true`: each pushed ref's change
+Review records, only in repos with `git config review-loop.gate true`: each pushed ref's change
 (merge-base with the remote's default branch .. the pushed sha, keyed by the same patch-id eot uses) needs an
 eot/recheck record whose newest round, with accepts applied again now, has no open hard, blocking, proven or
 needs_human finding and no error. A missing or failing record warns in warn mode and refuses in block mode.
@@ -20,7 +20,7 @@ needs_human finding and no error. A missing or failing record warns in warn mode
 A record counts only for the exact pushed content: same patch-id, and its head has the pushed tree. The opt-ins
 are read from .git/config alone, so `git -c review-loop.gate=false push` doesn't switch them off.
 
-UI results (plan 7.5), only with `git config review-loop.ui-required true`: a pushed change that touches UI files
+UI results, only with `git config review-loop.ui-required true`: a pushed change that touches UI files
 (review_loop/ui.py's classes) needs a `review-loop ui` result for the same patch-id with nothing open after accepts;
 missing or failing warns, and refuses in block mode. REVIEW_LOOP_SKIP doesn't cover it.
 

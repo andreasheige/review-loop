@@ -1,4 +1,4 @@
-"""Fixture tests for `review-loop land` (plan 8.8: an agent merges only a risk:low PR, recomputed from its head).
+"""Fixture tests for `review-loop land` (an agent merges only a risk:low PR, recomputed from its head).
 
 usage: python3 -m unittest tests.test_land -v      (from the repo root)
 
@@ -110,7 +110,7 @@ class LandTest(unittest.TestCase):
                 code, msg = self.land(gh)
                 self.assertEqual(code, 1)
                 self.assertIn(f"risk:{tier}", msg)
-                self.assertIn("Andreas", msg)
+                self.assertIn("waiting for a human", msg)
                 self.assertEqual(gh.merged(), [])
 
     def test_a_risk_low_label_does_not_count(self):

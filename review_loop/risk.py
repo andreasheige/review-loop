@@ -1,4 +1,4 @@
-"""review-loop risk (plan 8.7): how much human review a change needs — low, medium or high — decided in code.
+"""review-loop risk: how much human review a change needs — low, medium or high — decided in code.
 
 Inputs are the diff merge-base(base, rev)..rev, the eot/recheck record for exactly that content, the UI result and
 the repo's sensitivity. A label or PR text never counts: `land` (8.8) recomputes this from the pushed head.

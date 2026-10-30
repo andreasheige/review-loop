@@ -49,7 +49,7 @@ def strongest(verdicts):
 
 
 def claude_like(kind, arg, cwd, harness):
-    """Claude Code and Pi: guardrail on Bash|Read|Write|Edit (plan 6.3), secret-placement on Write|Edit|Bash."""
+    """Claude Code and Pi: guardrail on Bash|Read|Write|Edit, secret-placement on Write|Edit|Bash."""
     if kind == "bash":
         payload, scripts = {"tool_name": "Bash", "tool_input": {"command": arg}}, [GUARDRAIL, SECRET]
     elif kind == "read":
@@ -63,7 +63,7 @@ def claude_like(kind, arg, cwd, harness):
 
 
 def codex(kind, arg, cwd):
-    """Codex: guardrail + secret-placement on Bash and on apply_patch (plan 6.3); reads go through the shell."""
+    """Codex: guardrail + secret-placement on Bash and on apply_patch; reads go through the shell."""
     if kind == "read":
         kind, arg = "bash", f"cat {arg}"
     if kind == "bash":

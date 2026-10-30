@@ -35,7 +35,7 @@ CONFIG = (  # case-insensitive: claude.md loads as CLAUDE.md on APFS
     ("git-hooks", re.compile(r"(^|/)\.(husky|githooks)" + D + r"|(^|/)lefthook\.ya?ml$|(^|/)\.pre-commit-config\.ya?ml$",
                              re.I)),
     ("review-loop-config", re.compile(r"(^|/)\.review-loop\.toml$", re.I)),
-    # UI checks' own goalposts (plan 7.2): accepting a new baseline or loosening axe makes a visual or a11y
+    # UI checks' own goalposts: accepting a new baseline or loosening axe makes a visual or a11y
     # regression pass, so a human looks at it.
     ("ui-baseline", re.compile(r"(^|/)__(image_)?snapshots__" + D + r"|\.snap$|(^|/)[^/]+-snapshots" + D +
                                r"|(^|/)backstop(_data" + D + r"|\.json$)|(^|/)\.axerc(\.[a-z]+)?$|(^|/)\.?axe\.config\.([cm]?[jt]s|json)$|"

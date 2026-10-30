@@ -1,4 +1,4 @@
-"""Fixture tests for `review-loop ui` (plan 7.1): axe, keyboard trap and screenshots, base vs head.
+"""Fixture tests for `review-loop ui`: axe, keyboard trap and screenshots, base vs head.
 
 usage: REVIEW_LOOP_UI_NODE_MODULES=<a node_modules with playwright and axe-core> python3 -m unittest tests.test_ui -v
 
@@ -122,7 +122,7 @@ class CompareTest(unittest.TestCase):
 
 
 class OptInTest(unittest.TestCase):
-    """No Playwright in the repo: the opt-in prompt (plan 7.4). Needs no Node."""
+    """No Playwright in the repo: the opt-in prompt. Needs no Node."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="review-loop-optin-"))
@@ -139,7 +139,7 @@ class OptInTest(unittest.TestCase):
                    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
         self.git = lambda *a: subprocess.run(["git", *a], cwd=self.repo, env=env, check=True, capture_output=True)
         self.git("init", "-q", "-b", "main")
-        self.git("remote", "add", "origin", "https://github.com/andreasheige/ui-fixture.git")
+        self.git("remote", "add", "origin", "https://github.com/example/ui-fixture.git")
         (self.repo / "Button.tsx").write_text("a\n")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "base")
@@ -162,7 +162,7 @@ class OptInTest(unittest.TestCase):
         self.assertEqual(self.ui(lambda q: "n")["status"], "no_playwright:snoozed")
         self.assertEqual(self.ui(self.never_asked)["status"], "no_playwright:snoozed")
         data = json.loads(ui.optin_path().read_text())
-        key = "https://github.com/andreasheige/ui-fixture.git"
+        key = "https://github.com/example/ui-fixture.git"
         data[key]["at"] = "2026-01-01T00:00:00+00:00"
         ui.optin_path().write_text(json.dumps(data))
         asked = []

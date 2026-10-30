@@ -1,4 +1,4 @@
-"""Design-token lint (plan 7.3), warn-first: a hard-coded colour in an added line of a UI file.
+"""Design-token lint, warn-first: a hard-coded colour in an added line of a UI file.
 
 Only in repos that opt in with `git config review-loop.design-tokens true`. Token, theme and palette files are
 where colours belong, so they are skipped. Always `advisory` (lens ui): it points at a likely token miss and

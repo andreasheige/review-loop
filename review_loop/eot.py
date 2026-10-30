@@ -25,12 +25,12 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from .tools import write_safely
-from . import accept, deps, launcher, normalise, scan, secret_scan, workers
+from . import accept, deps, launcher, normalise, owner, scan, secret_scan, workers
 from .gitdiff import GitError, git, verify_commit
 
 FAMILY = {"claude": "claude", "codex": "gpt", "copilot": "gpt"}  # copilot runs a GPT model
 DEFAULT_MODEL = {"claude": "opus", "codex": None, "copilot": workers.COPILOT_MODEL}
-NON_AUTHOR = {"claude": ["copilot"], "gpt": ["claude"], "unknown": ["claude", "copilot"]}  # copilot until Codex quota is back (Decision 14)
+NON_AUTHOR = {"claude": ["copilot"], "gpt": ["claude"], "unknown": ["claude", "copilot"]}  # copilot until Codex quota is back
 CANARY = re.compile(r"REVIEWLOOP_CANARY_[A-Z0-9]{20}")
 DOC_SUFFIXES = {".md", ".mdx", ".rst", ".adoc"}  # not .txt: requirements.txt is a manifest
 # never skipped, whatever the file class: agent config, CI, and anything named like a security control
@@ -297,18 +297,17 @@ def completed(r: dict) -> bool:
         f["rule_class"] == "secret" and f["introduced_by"] == "diff" for f in r["findings"])
 
 
-# Paths where a second, security-only finder runs as well (plan 6.1 "path-triggered extra security finder", on trial).
+# Paths where a second, security-only finder runs as well (path-triggered extra security finder, on trial).
 SECURITY_PATH = re.compile(r"(^|/)(auth|login|logout|session|token|oauth|jwt|saml|sso|crypto|secret|password|permission|"
                            r"acl|rbac|policy|policies|middleware|security|csrf|cors|sanitiz|upload|\.github/workflows/)"
                            r"|(^|/)(Dockerfile|nginx\.conf|.*\.tf)$", re.I)
 
 
 def sensitive(repo: str) -> bool:
-    """Real users' data (Decision 1): client repos under ~/Knowit, or `git config review-loop.sensitive true`."""
+    """Real users' data: a repo under a client root (owner.py), or `git config review-loop.sensitive true`."""
     if git(repo, "config", "--bool", "review-loop.sensitive", check=False).stdout.decode().strip() == "true":
         return True
-    knowit = Path.home() / "Knowit"
-    return Path(repo).resolve().is_relative_to(knowit.resolve()) if knowit.exists() else False
+    return owner.in_client_root(repo)
 
 
 def hints_from(findings: list[dict]) -> list[dict]:
