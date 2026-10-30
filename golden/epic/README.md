@@ -11,7 +11,7 @@ bugs fixed. Synthetic content only, no secrets.
 | `PRD.md`, `tickets/T1.md`…`T3.md` | the epic's PRD and the three tickets (intent + definition of done) |
 | `expected.json` | refs and SHAs, the four bugs (sites at the epic head, lens, rule class, tickets involved), the clean twin's `expect: []` |
 | `verify.py` | rebuilds, checks SHAs match, every site lies in the epic diff, the clean twin differs at every bug |
-| `eot_tickets.sh <out-dir>` | runs `review-loop eot` on each ticket alone (the 13.1 check) |
+| `eot_tickets.sh <out-dir>` | runs `review-loop eot` on each ticket alone |
 
 ## The app and the epic
 
@@ -45,7 +45,7 @@ golden/epic/build.sh /tmp/golden-epic      # fresh directory
 golden/epic/verify.py                      # stdlib only; exit 0 = all checks pass
 ```
 
-## EOT alone misses them (item 13.1)
+## EOT alone misses them
 
 ```sh
 golden/epic/eot_tickets.sh /tmp/golden-epic-eot [finder] [verifier]   # default claude:opus
@@ -73,11 +73,11 @@ Neither describes the seeded bug there, so neither counts.
 
 Earlier runs found real single-ticket defects in a previous version of the fixture: races on save
 and share, an owner who could demote themselves, a removed member who kept seeing the roster, and a
-`WORKER_ID` silently defaulting. Those were fixed in both twins so that a 13.2 run on the clean twin
+`WORKER_ID` silently defaulting. Those were fixed in both twins so that an epic-review run on the clean twin
 is not dominated by them. They also caught none of the four bugs. What is left (the two races and
 nits above) is the same in both twins.
 
-## Scoring the epic reviewer (item 13.2)
+## Scoring the epic reviewer
 
 Run `review-loop epic doc-sharing` on `epic/doc-sharing` (base `main`) and on `epic/doc-sharing-clean`.
 
