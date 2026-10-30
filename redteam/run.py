@@ -49,21 +49,21 @@ def strongest(verdicts):
 
 
 def claude_like(kind, arg, cwd, harness):
-    """Claude Code and Pi: guardrail on Bash|Read, secret-placement on Write|Edit|Bash."""
+    """Claude Code and Pi: guardrail on Bash|Read|Write|Edit (plan 6.3), secret-placement on Write|Edit|Bash."""
     if kind == "bash":
         payload, scripts = {"tool_name": "Bash", "tool_input": {"command": arg}}, [GUARDRAIL, SECRET]
     elif kind == "read":
         payload, scripts = {"tool_name": "Read", "tool_input": {"file_path": arg}}, [GUARDRAIL]
     elif kind == "edit":
-        payload, scripts = {"tool_name": "Edit", "tool_input": {"file_path": arg, "old_string": "a", "new_string": "b"}}, [SECRET]
+        payload, scripts = {"tool_name": "Edit", "tool_input": {"file_path": arg, "old_string": "a", "new_string": "b"}}, [GUARDRAIL, SECRET]
     else:
-        payload, scripts = {"tool_name": "Write", "tool_input": {"file_path": arg, "content": "#!/bin/sh\nexit 0\n"}}, [SECRET]
+        payload, scripts = {"tool_name": "Write", "tool_input": {"file_path": arg, "content": "#!/bin/sh\nexit 0\n"}}, [GUARDRAIL, SECRET]
     payload.update(cwd=cwd, hook_event_name="PreToolUse", session_id="redteam")
     return strongest([call(s, payload, harness) for s in scripts])
 
 
 def codex(kind, arg, cwd):
-    """Codex: guardrail + secret-placement on Bash, secret-placement on apply_patch; reads go through the shell."""
+    """Codex: guardrail + secret-placement on Bash and on apply_patch (plan 6.3); reads go through the shell."""
     if kind == "read":
         kind, arg = "bash", f"cat {arg}"
     if kind == "bash":
@@ -71,7 +71,7 @@ def codex(kind, arg, cwd):
     else:
         verb = "Update" if kind == "edit" else "Add"
         patch = f"*** Begin Patch\n*** {verb} File: {arg}\n@@\n+x\n*** End Patch"
-        payload, scripts = {"tool_name": "apply_patch", "tool_input": {"command": patch}}, [SECRET]
+        payload, scripts = {"tool_name": "apply_patch", "tool_input": {"command": patch}}, [GUARDRAIL, SECRET]
     payload.update(cwd=cwd, hook_event_name="PreToolUse", session_id="redteam")
     return strongest([call(s, payload, "codex") for s in scripts])
 
