@@ -120,7 +120,21 @@ def stats(repo: str) -> dict:
         "precision_human": round(sum(v in ("fixed", "intentional") for v in human) / len(human), 3) if human else None,
         "overrides": len(lines(common / "review-loop" / "accepts.jsonl")),
         "skips": len(lines(common / "review-loop" / "skips.log")),
+        "risk": risk_tiers(common),
     }
+
+
+def risk_tiers(common: Path) -> dict:
+    """Tiers from `review-loop risk` (risk.json per patch-id), to check later whether low was really safe."""
+    tiers = {"low": 0, "medium": 0, "high": 0}
+    for p in (common / "review-loop").glob("*/risk.json"):
+        try:
+            t = json.loads(p.read_text()).get("tier")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if t in tiers:
+            tiers[t] += 1
+    return tiers
 
 
 def rows(key: str, st: dict, day: str) -> list[list]:
