@@ -12,8 +12,8 @@ diff → journey run → tickets (first-parent: a merge commit is one ticket, pl
 or ticket key) → seams (files changed by two or more tickets; symbols one ticket defines or changes and another
 ticket's files use; `graphify affected` when the repo has a graph) → chunks of at most LIMIT changed lines, the
 two sides of a seam in one chunk where they fit → a finder per chunk (prompts/epic-find.md) → a verifier of the
-other model family per correctness/security finding with a failure scenario (a finding from another chunk with
-the same lens and an overlapping first site is merged into the first: one seam, seen from both sides) → threat-model delta (sensitive repos),
+other model family per correctness/security finding with a failure scenario (each finding verified on its own;
+kept findings from different chunks with the same lens, status and an overlapping first site share one follow-up) → threat-model delta (sensitive repos),
 UI run + manual a11y checklist (UI files changed), image check (Dockerfile at the head) → a follow-up ticket per
 kept finding → record at $(git rev-parse --git-common-dir)/review-loop/<patch-id>/epic-<merge-base>/record.json,
 keyed by (patch-id of the epic diff, merge-base SHA), so any move of the base forces a new run.
@@ -638,13 +638,16 @@ def involved(f: dict, line_owner: dict[str, dict[int, str]]) -> list[str]:
     return who
 
 
-def follow_up(f: dict, n: int, slug: str, tickets_involved: list[str]) -> str:
+def follow_up(f: dict, n: int, slug: str, tickets_involved: list[str], also=()) -> str:
     sc = f.get("failure_scenario")
     lines = [f"# FU-{n:02d}: {f['title']}", "", f"Follow-up from `review-loop epic {slug}` (finding `{f['id']}`, "
              f"{f['status']}, lens {f['lens']}{', ' + f['cwe'] if f.get('cwe') else ''}).", "",
              "## Tickets involved", "", *([f"- {t}" for t in tickets_involved] or ["- (lines older than the epic)"]),
              "", "## Evidence", "", *[f"- `{s['path']}:{s['start_line']}-{s['end_line']}`" for s in f["sites"]], "",
              "Reviewer's trace (model output: check it against the code):", "", workers.fence(f["reasoning"]), ""]
+    if also:
+        lines += ["Also reported from another chunk (same lens and site; each was verified on its own):", "",
+                  *[f"- `{g['id']}` ({g['status']}): {g['title']}" for g in also], ""]
     if sc:
         lines += ["## Failure scenario", "", f"- Input: {sc['input']}", f"- Expected: {sc['expected']}",
                   f"- Actual: {sc['actual']}", ""]
@@ -718,13 +721,17 @@ def run(repo: str, slug: str, base_ref: str, *, prd=None, intent_text=None, tick
         record["findings"] = list(sc["findings"])
         if sc.get("error"):
             raise EpicError(f"scan: {sc['error']}")
-        for label, t in [(f"<{source}>", text)] + [(f"<ticket {n}>", t) for n, t in ticket_files]:
+        units = tickets(repo, mb, head)
+        # commit messages, ticket ids and branch names go into the prompt (units_text) whatever the intent source
+        meta = git(repo, "log", "--format=%B", f"{mb}..{head}").stdout.decode("utf-8", "replace") + "\n" + "\n".join(
+            f"{u['id']} {u['ref'] or ''}" for u in units)
+        texts = [("<commits>", meta)] + ([(f"<{source}>", text)] if source != "commits" else [])
+        for label, t in texts + [(f"<ticket {n}>", t) for n, t in ticket_files]:
             if t.strip():  # every text that goes into a finder prompt gets D1 as well
                 record["findings"] += secret_scan.scan_text(t, label)
         if any(f["rule_class"] == "secret" and f["introduced_by"] == "diff" for f in record["findings"]):
             raise eot.StopReview  # D1, any confidence: no model may see the diff
         epic["checks"]["journey"] = journey(repo, head, out_dir, journey_run)
-        units = tickets(repo, mb, head)
         changed = name_only(repo, mb, head)
         epic["tickets"] = [{"id": u["id"], "merge": u["merge"], "ref": u["ref"], "commits": u["commits"],
                             "files": u["files"]} for u in units]
@@ -758,13 +765,17 @@ def run(repo: str, slug: str, base_ref: str, *, prd=None, intent_text=None, tick
     record["outcome"] = o
     epic["wall_seconds"] = round(time.monotonic() - t0, 1)
     if not error:
-        epic["follow_ups"] = write_follow_ups(out_dir, slug, record["findings"], line_owner)
+        epic["follow_ups"] = write_follow_ups(out_dir, slug, record["findings"], line_owner, epic.get("duplicates"))
     eot.write(out_dir / "record.json", record)
     return record, out_dir
 
 
-def write_follow_ups(out_dir: Path, slug: str, findings: list[dict], line_owner) -> list[str]:
-    kept = [f for f in findings if f["id"].startswith("rev-") and f["status"] != "discarded"]
+def write_follow_ups(out_dir: Path, slug: str, findings: list[dict], line_owner, dups=None) -> list[str]:
+    """One follow-up per kept finding; findings grouped as duplicates go into the first one's ticket."""
+    dups = dups or {}
+    later = {i for ids in dups.values() for i in ids}
+    by_id = {f["id"]: f for f in findings}
+    kept = [f for f in findings if f["id"].startswith("rev-") and f["status"] != "discarded" and f["id"] not in later]
     if not kept:
         return []
     (out_dir / "follow-ups").mkdir(exist_ok=True)
@@ -772,21 +783,39 @@ def write_follow_ups(out_dir: Path, slug: str, findings: list[dict], line_owner)
     out = []
     for n, f in enumerate(sorted(kept, key=lambda f: (rank.get(f["status"], 2), f["id"])), 1):
         rel = f"follow-ups/fu-{n:02d}-{f['id']}.md"
-        eot.write_prompt(out_dir / rel, follow_up(f, n, slug, involved(f, line_owner)))
+        also = [by_id[i] for i in dups.get(f["id"], [])]
+        who = involved(f, line_owner) + [t for g in also for t in involved(g, line_owner)]
+        eot.write_prompt(out_dir / rel, follow_up(f, n, slug, list(dict.fromkeys(who)), also))
         out.append(rel)
     return out
 
 
 def same_defect(f: dict, chunk: str, found: dict[str, dict], where: dict[str, str]) -> str | None:
-    """An earlier finding from another chunk with the same lens whose first site overlaps this one's: the same
-    defect seen from both sides of a seam. Within one chunk two findings at one site stay two."""
+    """An earlier finding from another chunk with the same lens and status whose first site overlaps this one's:
+    likely the same defect seen from both sides of a seam. Within one chunk two findings at one site stay two."""
     a = f["sites"][0]
     for fid, g in found.items():
         b = g["sites"][0]
-        if (where[fid] != chunk and g["lens"] == f["lens"] and a["path"] == b["path"]
+        if (where[fid] != chunk and g["lens"] == f["lens"] and g["status"] == f["status"] and a["path"] == b["path"]
                 and a["start_line"] <= b["end_line"] + OVERLAP and b["start_line"] <= a["end_line"] + OVERLAP):
             return fid
     return None
+
+
+def duplicates(findings: list[dict], where: dict[str, str]) -> dict[str, list[str]]:
+    """{first id: later ids} among kept findings, for one follow-up per defect. Each finding was verified and keeps
+    its own status; this only groups what a human reads."""
+    heads: dict[str, dict] = {}
+    out: dict[str, list[str]] = {}
+    for f in findings:
+        if f["status"] == "discarded":
+            continue
+        first = same_defect(f, where[f["id"]], heads, where)
+        if first:
+            out.setdefault(first, []).append(f["id"])
+        else:
+            heads[f["id"]] = f
+    return out
 
 
 def review(repo, head, text, tickets_text, units, seam_list, own, chunk_list, diffs, changed, finders, verifiers,
@@ -827,12 +856,9 @@ def review(repo, head, text, tickets_text, units, seam_list, own, chunk_list, di
             c["findings"] = c.get("findings", 0) + len(out["findings"])
             for raw in out["findings"]:
                 f = eot.model_finding(raw)
-                fid = f["id"] if f["id"] in found else same_defect(f, c["id"], found, where) or f["id"]
-                if fid != f["id"]:
-                    record["epic"].setdefault("duplicates", {}).setdefault(fid, []).append(f["id"])
-                found.setdefault(fid, f)
-                where.setdefault(fid, c["id"])
-                by.setdefault(fid, set()).add(eot.FAMILY[spec[0]])
+                found.setdefault(f["id"], f)
+                where.setdefault(f["id"], c["id"])
+                by.setdefault(f["id"], set()).add(eot.FAMILY[spec[0]])
         record["reviewed_paths"] = reviewed
 
         vjobs = []
@@ -865,6 +891,9 @@ def review(repo, head, text, tickets_text, units, seam_list, own, chunk_list, di
             v = next((v for v in vs if v["verdict"] != "confirmed"), vs[0])
             f["verification"] = {"verdict": v["verdict"], "reasoning": v["reasoning"],
                                  "counter_evidence": v["counter_evidence"], "family": v["family"]}
+    dups = duplicates(list(found.values()), where)
+    if dups:
+        record["epic"]["duplicates"] = dups
     return list(found.values())
 
 

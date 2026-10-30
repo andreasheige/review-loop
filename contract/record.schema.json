@@ -359,7 +359,7 @@
           }
         },
         "duplicates": {
-          "description": "Kept finding id -> ids from other chunks merged into it (same lens, overlapping first site).",
+          "description": "Kept finding id -> later kept ids from other chunks with the same lens, status and overlapping first site; one follow-up for the group. Every finding keeps its own status.",
           "type": "object",
           "additionalProperties": {
             "type": "array",

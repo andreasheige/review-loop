@@ -177,14 +177,26 @@ class SeamAndChunkTest(EpicCase):
         chunks = epic.chunks({"a.py": 150, "b.py": 100, "c.py": 120, "d.py": 140}, [["a.py", "c.py"]], set())
         self.assertIn(["a.py", "c.py"], [c["paths"] for c in chunks])
 
-    def test_same_defect_from_another_chunk_is_merged(self):
-        first = {"lens": "security", "sites": [site("s.ts", 19, 19), site("ids.ts", 10, 13)]}
-        found, where = {"rev-a": first}, {"rev-a": "c01"}
-        self.assertEqual(epic.same_defect({"lens": "security", "sites": [site("s.ts", 16, 20)]}, "c02", found, where),
-                         "rev-a")
-        self.assertIsNone(epic.same_defect({"lens": "security", "sites": [site("s.ts", 16, 20)]}, "c01", found, where))
-        self.assertIsNone(epic.same_defect({"lens": "correctness", "sites": [site("s.ts", 19, 19)]}, "c02", found, where))
-        self.assertIsNone(epic.same_defect({"lens": "security", "sites": [site("s.ts", 40, 41)]}, "c02", found, where))
+    def test_duplicates_group_kept_findings_from_other_chunks_only(self):
+        """Grouping is for follow-ups: each finding keeps its own status, a discarded one never hides another."""
+        def f(fid, lens, status, a, b):
+            return {"id": fid, "lens": lens, "status": status, "sites": [site("s.ts", a, b), site("ids.ts", 10, 13)]}
+
+        where = {"rev-a": "c01", "rev-b": "c02", "rev-c": "c01", "rev-d": "c02", "rev-e": "c02", "rev-f": "c03"}
+        found = [f("rev-a", "security", "blocking", 19, 19), f("rev-b", "security", "blocking", 16, 20),
+                 f("rev-c", "security", "blocking", 18, 19), f("rev-d", "correctness", "blocking", 19, 19),
+                 f("rev-e", "security", "blocking", 40, 41)]
+        self.assertEqual(epic.duplicates(found, where), {"rev-a": ["rev-b"]})  # rev-c: same chunk as rev-a
+        refuted = [f("rev-a", "security", "discarded", 19, 19), f("rev-b", "security", "blocking", 19, 19),
+                   f("rev-f", "security", "advisory", 19, 19)]
+        self.assertEqual(epic.duplicates(refuted, where), {})
+        for g in found:
+            g.update(title=f"t {g['id']}", reasoning="r", failure_scenario=None, body=None)
+        out = Path(tempfile.mkdtemp(prefix="review-loop-fu-"))
+        self.addCleanup(shutil.rmtree, out)
+        written = epic.write_follow_ups(out, "demo", found, {}, {"rev-a": ["rev-b"]})
+        self.assertEqual(len(written), 4)
+        self.assertIn("`rev-b` (blocking): t rev-b", (out / written[0]).read_text())
 
     def test_coverage_check_refuses_gaps_and_duplicates(self):
         ok = [{"id": "c01", "paths": ["a", "b"], "lines": 2, "review": "finder"}]
@@ -292,6 +304,19 @@ class RunTest(EpicCase):
         self.assertEqual((code, calls), (2, [True]))
         self.assertEqual(out["epic"]["checks"]["ui"]["status"], "needs_human")
         self.assertTrue((Path(out["record_path"]).parent / "a11y-checklist.md").is_file())
+
+    def test_secret_in_a_commit_message_stops_before_any_model_even_with_a_prd(self):
+        prd = self.tmp / "prd.md"
+        prd.write_text("# PRD\n")
+        self.git("checkout", "-q", "epic/demo")
+        self.write("src/k.py", "K = 1\n")
+        self.commit(f"feat: k\n\nkey {canary()}")
+        self.git("checkout", "-q", "main")
+        fake = FakeWorkers()
+        code, out = self.run_epic(fake, "--finder", "claude:sonnet", "--prd", str(prd))
+        self.assertEqual(code, 1)
+        self.assertEqual(fake.calls, [])
+        self.assertEqual([(f["sites"][0]["path"], f["status"]) for f in out["findings"]], [("<commits>", "hard")])
 
     def test_secret_in_the_epic_stops_before_any_model(self):
         c = canary()
