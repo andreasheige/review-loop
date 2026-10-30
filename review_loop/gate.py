@@ -226,7 +226,7 @@ def review_state(repo: str, base: str | None, local_sha: str, confirm=None) -> t
         pid = eot.patch_id(repo, base, local_sha)
     except eot.EotError:
         return "ok", ""  # nothing to review
-    if all(eot.skipped(p) for _, p, _ in eot.changes(repo, base, local_sha)):
+    if all(eot.skipped(p) and (src is None or eot.skipped(src)) for _, p, src in eot.changes(repo, base, local_sha)):
         return "ok", ""  # docs and lockfiles only: eot wouldn't review them either (lockfiles still get D3 in scan)
     if skip_confirmed(pid, local_sha, confirm):
         return "skipped", "review check skipped (REVIEW_LOOP_SKIP=1, confirmed at the terminal, logged)"

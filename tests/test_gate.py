@@ -266,6 +266,18 @@ class GateTest(unittest.TestCase):
         self.mode_file.write_text("block\n")
         sha = self.commit("notes/today.md", "# Today\n\nNotes.\n")
         self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]), (0, ""))
+        self.git("switch", "-q", "main")
+        self.commit("src/calc.py", "def total(xs):\n    return sum(xs)\n")
+        self.git("push", "-q", "origin", "main")
+        self.git("switch", "-q", "-c", "renamed")
+        (self.repo / "notes").mkdir(exist_ok=True)
+        self.git("mv", "src/calc.py", "notes/calc.md")
+        self.git("commit", "-q", "-m", "move")
+        sha = self.git("rev-parse", "HEAD")  # code on main renamed to a doc: still a code change
+        rc, err = self.gate([f"refs/heads/renamed {sha} refs/heads/renamed {ZERO}"])
+        self.assertEqual(rc, 1)
+        self.assertIn("no review record", err)
+        self.git("switch", "-q", "feat")
         sha = self.commit("src/ok.py", "x = 1\n")  # code in the same push: the record is needed again
         rc, err = self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])
         self.assertEqual(rc, 1)
