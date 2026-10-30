@@ -86,3 +86,28 @@ Run `review-loop epic doc-sharing` on `epic/doc-sharing` (base `main`) and on `e
   bug. Target: at least 3 of the 4.
 - False positives: on the clean twin, every `blocking`/`proven`/`hard` finding is a false
   positive. Target: at most 1.
+
+```sh
+golden/epic/epic_runs.sh /tmp/golden-epic-run [finder] [verifier] [tag]   # default copilot, claude:sonnet
+golden/epic/score.py golden/results/epic-review/<tag>-buggy.json golden/results/epic-review/<tag>-clean.json
+```
+
+`epic_runs.sh` builds the fixture, runs both epics with `--prd PRD.md --tickets tickets/`, and scores them.
+`score.py` lists, per bug, the kept findings that overlap its sites; whether one describes the bug is
+judged from its title. Outputs go to `golden/results/epic-review/` (gitignored).
+
+Result on 2026-10-30 (`review-loop epic`, one 287-line chunk unless noted):
+
+| run | finder → verifier | bugs found | blocking FPs on the clean twin | wall (buggy) |
+|---|---|---|---|---|
+| 1, 2 | copilot (GPT) → claude:sonnet | 4/4, 4/4 | 0, 0 | 72 s, 72 s |
+| 3, 4 | claude:sonnet → copilot | 4/4, 4/4 | 0, 0 | 39 s, 38 s |
+| 5, 6 | claude:sonnet → copilot, chunk limit forced to 100 (4 chunks) | 4/4, 4/4 | 0, 0 | 78 s, 58 s |
+| 7 | claude:sonnet → copilot, no PRD or ticket texts | 4/4 | 0 | 34 s |
+
+Every bug was found as a blocking finding the other family confirmed, and chunks covered the diff
+exactly in every run. For comparison, `eot` over the whole epic diff (same workers) also found 4/4
+but blocked the clean twin with 2 findings (version order under clock skew, every member's email
+shown to any workspace viewer): single-ticket concerns that `epic` leaves to the ticket reviews.
+The fixture is small enough to fit one chunk, so it measures the cross-ticket prompt and seams more
+than the chunking.
