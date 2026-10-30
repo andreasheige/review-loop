@@ -1,0 +1,165 @@
+{
+  "slug": "doc-sharing",
+  "repo": "synthetic-epic:doc-sharing",
+  "build": "golden/epic/build.sh <out-dir>  (repo at <out-dir>/doc-sharing)",
+  "topology": "T1, T2, T3 each branch from main and are merged --no-ff into the epic branch in that order; every merge is textually clean",
+  "refs": {
+    "base": {
+      "ref": "main",
+      "sha": "bfb0aec72d8788ce1a78c5444acfb68d6a27818a"
+    },
+    "tickets": [
+      {
+        "id": "T1",
+        "ticket": "tickets/T1.md",
+        "ref": "ticket/DS-1-workspaces",
+        "base": "main",
+        "sha": "9c89f90704b651fb77771cca0f8ca249df3270d5"
+      },
+      {
+        "id": "T2",
+        "ticket": "tickets/T2.md",
+        "ref": "ticket/DS-2-versions",
+        "base": "main",
+        "sha": "6804053b1c76821ed212965879929f2b85136e9b"
+      },
+      {
+        "id": "T3",
+        "ticket": "tickets/T3.md",
+        "ref": "ticket/DS-3-share-links",
+        "base": "main",
+        "sha": "7636ff124c8c3b80af2de673f5028b3db964e2e1"
+      }
+    ],
+    "epic": {
+      "ref": "epic/doc-sharing",
+      "sha": "9cd21ebad2e90ea52d6883f7a678f307e6e0df0e"
+    }
+  },
+  "bugs": [
+    {
+      "id": "idor-version-history",
+      "tickets": [
+        "T1",
+        "T2"
+      ],
+      "lens": "security",
+      "rule_class": null,
+      "summary": "Version list/view/restore routes take the document id straight from the URL; T2 relied on the router.param owner check that T1 replaced with per-route loadDocument(), so any signed-in user can read and restore any document's history (IDOR)",
+      "sites": [
+        {
+          "path": "src/documents/routes.ts",
+          "start_line": 51,
+          "end_line": 65
+        }
+      ]
+    },
+    {
+      "id": "share-link-leaks-member-emails",
+      "tickets": [
+        "T1",
+        "T3"
+      ],
+      "lens": "security",
+      "rule_class": null,
+      "summary": "The anonymous share-link view returns toDocumentDto(findDocument(...)); T1 made findDocument load workspace members and toDocumentDto add their names and emails, so anyone with a link sees every member's email",
+      "sites": [
+        {
+          "path": "src/sharing/routes.ts",
+          "start_line": 40,
+          "end_line": 40
+        },
+        {
+          "path": "src/documents/serialize.ts",
+          "start_line": 12,
+          "end_line": 15
+        },
+        {
+          "path": "src/documents/store.ts",
+          "start_line": 6,
+          "end_line": 9
+        }
+      ]
+    },
+    {
+      "id": "restore-resurrects-revoked-link",
+      "tickets": [
+        "T2",
+        "T3"
+      ],
+      "lens": "security",
+      "rule_class": null,
+      "summary": "Version snapshots keep every column except a denylist and restore writes them all back, so restoring a version made while a share link existed brings back T3's revoked shareToken (and T1's old workspaceId)",
+      "sites": [
+        {
+          "path": "src/documents/versions.ts",
+          "start_line": 6,
+          "end_line": 8
+        },
+        {
+          "path": "src/documents/versions.ts",
+          "start_line": 37,
+          "end_line": 37
+        }
+      ]
+    },
+    {
+      "id": "predictable-share-tokens",
+      "tickets": [
+        "T2",
+        "T3"
+      ],
+      "lens": "security",
+      "rule_class": null,
+      "summary": "T3 mints share tokens with newId(), a random UUID on main; T2 turned newId() into timestamp + worker + sequence, so share tokens are predictable and enumerable",
+      "sites": [
+        {
+          "path": "src/sharing/routes.ts",
+          "start_line": 19,
+          "end_line": 19
+        },
+        {
+          "path": "src/lib/ids.ts",
+          "start_line": 10,
+          "end_line": 13
+        }
+      ]
+    }
+  ],
+  "clean_twin": {
+    "tickets": [
+      {
+        "id": "T1",
+        "ticket": "tickets/T1.md",
+        "ref": "ticket/DS-1-workspaces",
+        "base": "main",
+        "sha": "9c89f90704b651fb77771cca0f8ca249df3270d5"
+      },
+      {
+        "id": "T2",
+        "ticket": "tickets/T2.md",
+        "ref": "ticket/DS-2-versions-clean",
+        "base": "main",
+        "sha": "adfc85dd08acc9c9b3502958f241ec91992af189"
+      },
+      {
+        "id": "T3",
+        "ticket": "tickets/T3.md",
+        "ref": "ticket/DS-3-share-links-clean",
+        "base": "main",
+        "sha": "e330f878fe64b83003ffdd2d4ad7528fc62df676"
+      }
+    ],
+    "epic": {
+      "ref": "epic/doc-sharing-clean",
+      "sha": "fd6796afede06c1ffcd58156d12e6060a1acb0e5"
+    },
+    "fixes": {
+      "idor-version-history": "the T2 merge commit adds loadDocument('read'|'write') to the three version routes",
+      "share-link-leaks-member-emails": "T3 returns only title, body and updatedAt from the share link",
+      "restore-resurrects-revoked-link": "T2 snapshots and restores only title and body",
+      "predictable-share-tokens": "T3 mints tokens with randomBytes(32)"
+    },
+    "expect": []
+  }
+}
