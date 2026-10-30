@@ -54,7 +54,7 @@ def run(repo: str, staged: bool, rng: str | None = None, sarif: str | None = Non
         ]
         lockfiles = [(p, old, new) for p, old, new in lockfiles if new is not None]
         if lockfiles:
-            dep = deps.scan(lockfiles, gitdiff.origin(repo), net)
+            dep = deps.scan(lockfiles, gitdiff.origin(repo), net, repo)
             if policy and not staged and bot_lockfile_only(repo, base, head):
                 for f in dep:
                     if f["rule_class"] == "dep-young":

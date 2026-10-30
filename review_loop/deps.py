@@ -123,8 +123,9 @@ def changed(old: str | None, new: str, eco: str) -> dict:
     return {k: v for k, v in new_pkgs.items() if k not in old_pkgs}
 
 
-def is_online(origin: str | None) -> bool:
-    return owner.own_origin(origin)
+def is_online(origin: str | None, repo: str | None = None) -> bool:
+    """Own origin, and not a repo under a client root (a client repo cloned from an own fork stays offline)."""
+    return owner.own_origin(origin) and not (repo is not None and owner.in_client_root(repo))
 
 
 def registry_url(eco: str, name: str, version: str) -> str:
@@ -244,9 +245,10 @@ def check_offline(path: str, eco: str, pkgs: dict, new_text: str) -> list[dict]:
     return findings
 
 
-def scan(lockfiles: list[tuple[str, str | None, str]], origin: str | None, net: Net | None = None) -> list[dict]:
+def scan(lockfiles: list[tuple[str, str | None, str]], origin: str | None, net: Net | None = None,
+         repo: str | None = None) -> list[dict]:
     """lockfiles: [(repo-relative path, old text or None, new text)]."""
-    online = is_online(origin)
+    online = is_online(origin, repo)
     findings = []
     for path, old, new in lockfiles:
         eco = LOCKFILES[Path(path).name]
