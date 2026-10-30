@@ -712,7 +712,7 @@ def run(repo: str, slug: str, base_ref: str, *, prd=None, intent_text=None, tick
         "head": head, "branch": br, "author_family": family, "intent_source": source, "workers": [], "tools": {},
         "reviewed_paths": [], "findings": [], "epic": epic,
     }
-    error, stopped, line_owner = None, False, {}
+    error, stopped, line_owner, where = None, False, {}, {}
     t0 = time.monotonic()
     try:
         tickets_text, ticket_files = ticket_texts(tickets_dir)
@@ -743,8 +743,9 @@ def run(repo: str, slug: str, base_ref: str, *, prd=None, intent_text=None, tick
         own = {p: runs(line_owner[p], added[p]) for p in added}
         chunk_list, diffs = plan_chunks(repo, mb, head, seam_list)
         epic["chunks"] = chunk_list
-        record["findings"] += review(repo, head, text, tickets_text, units, seam_list, own, chunk_list, diffs,
-                                     changed, finders, verifiers, out_dir, record, runner)
+        found, where = review(repo, head, text, tickets_text, units, seam_list, own, chunk_list, diffs, changed,
+                              finders, verifiers, out_dir, record, runner)
+        record["findings"] += found
         epic["checks"]["threat_model"] = threat_model(repo, mb, head, out_dir)
         epic["checks"]["ui"], ui_findings = ui_check(repo, mb, head, out_dir, run_ui)
         record["findings"] += ui_findings
@@ -764,8 +765,11 @@ def run(repo: str, slug: str, base_ref: str, *, prd=None, intent_text=None, tick
         epic["waiting_on_human"] = waiting
     record["outcome"] = o
     epic["wall_seconds"] = round(time.monotonic() - t0, 1)
-    if not error:
-        epic["follow_ups"] = write_follow_ups(out_dir, slug, record["findings"], line_owner, epic.get("duplicates"))
+    if not error:  # grouped after accepts, so a finding accepted on its own leaves its group
+        dups = duplicates([f for f in record["findings"] if f["id"] in where], where)
+        if dups:
+            epic["duplicates"] = dups
+        epic["follow_ups"] = write_follow_ups(out_dir, slug, record["findings"], line_owner, dups)
     eot.write(out_dir / "record.json", record)
     return record, out_dir
 
@@ -819,9 +823,9 @@ def duplicates(findings: list[dict], where: dict[str, str]) -> dict[str, list[st
 
 
 def review(repo, head, text, tickets_text, units, seam_list, own, chunk_list, diffs, changed, finders, verifiers,
-           out_dir, record, runner) -> list[dict]:
-    """Finders per chunk, then each correctness/security finding with a failure scenario verified by the family
-    that did not find it."""
+           out_dir, record, runner) -> tuple[list[dict], dict[str, str]]:
+    """(findings, {finding id: chunk id}). Finders per chunk, then each correctness/security finding with a failure
+    scenario verified by the family that did not find it."""
     deleted = {p for st, p, _ in eot.changes(repo, record["key"]["merge_base"], head) if st == "D"}
     personal = eot.sensitive(repo)
     hints = eot.hints_from(record["findings"])
@@ -891,10 +895,7 @@ def review(repo, head, text, tickets_text, units, seam_list, own, chunk_list, di
             v = next((v for v in vs if v["verdict"] != "confirmed"), vs[0])
             f["verification"] = {"verdict": v["verdict"], "reasoning": v["reasoning"],
                                  "counter_evidence": v["counter_evidence"], "family": v["family"]}
-    dups = duplicates(list(found.values()), where)
-    if dups:
-        record["epic"]["duplicates"] = dups
-    return list(found.values())
+    return list(found.values()), where
 
 
 # ------------------------------------------------------------------ CLI
