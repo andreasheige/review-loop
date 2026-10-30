@@ -31,7 +31,7 @@ HIGH_PATH = re.compile(
 MANIFEST = re.compile(r"(^|/)(package\.json|pyproject\.toml|requirements[^/]*\.txt|setup\.py|setup\.cfg|go\.mod|"
                       r"Cargo\.toml|Gemfile|composer\.json|pom\.xml|build\.gradle(\.kts)?|[^/]+\.csproj|"
                       r"Directory\.Packages\.props)$", re.I)
-DOC = re.compile(r"\.(md|mdx|rst|txt|adoc)$|(^|/)(LICENSE|CHANGELOG|AUTHORS|NOTICE)(\.[a-z]+)?$", re.I)  # by file class only
+DOC = re.compile(r"\.(md|mdx|rst|txt|adoc)$|(^|/)(LICENSE|CHANGELOG)$", re.I)  # by file class only
 COPY = re.compile(r"(^|/)(locales?|i18n|translations?|lang)/.+\.(json|ya?ml|po|properties)$", re.I)
 OPEN = gate.OPEN
 
