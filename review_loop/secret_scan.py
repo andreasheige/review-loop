@@ -50,6 +50,14 @@ def hmac_key() -> bytes:
     return key
 
 
+def git_path(repo: str, flag: str) -> str:
+    p = subprocess.run(["git", "-C", repo, "rev-parse", flag], capture_output=True, text=True,
+                       env={**os.environ, "PATH": SAFE_PATH})
+    if p.returncode != 0 or not p.stdout.strip():
+        raise ToolError(f"git rev-parse {flag} failed in {repo}")
+    return p.stdout.strip()
+
+
 def is_generic(rule: str) -> bool:
     return rule.startswith("generic")
 
@@ -67,11 +75,18 @@ class Gitleaks:
         self.ignore_dir = tempfile.mkdtemp(prefix="review-loop-gl-ignore-")
         # base None: every commit reachable from head (a repo's first sweep)
         mode = ["--staged"] if staged else ["--log-opts", f"{base}..{head}" if base else head]
+        # gitleaks also reads <source>/.gitleaksignore whatever --gitleaks-ignore-path says, so the source is
+        # the empty dir and git finds the repo through GIT_DIR/GIT_WORK_TREE instead.
         cmd = [self.exe, "git", *mode, "--no-banner", "--log-level", "error", "--config", self.config,
                "--report-format", "json", "--report-path", "-", "--exit-code", "0", "--ignore-gitleaks-allow",
-               "--gitleaks-ignore-path", self.ignore_dir, repo]
+               "--gitleaks-ignore-path", self.ignore_dir, self.ignore_dir]
         env = {k: v for k, v in os.environ.items() if not k.startswith("GITLEAKS_")}
         env["PATH"] = SAFE_PATH
+        env["GIT_DIR"] = git_path(repo, "--absolute-git-dir")
+        env["GIT_WORK_TREE"] = git_path(repo, "--show-toplevel")
+        # a hook's GIT_INDEX_FILE (a partial commit's temporary index) may be relative to the repo
+        if env.get("GIT_INDEX_FILE"):
+            env["GIT_INDEX_FILE"] = os.path.join(repo, env["GIT_INDEX_FILE"])
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
 
     def collect(self) -> list[dict]:
