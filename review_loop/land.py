@@ -14,14 +14,16 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import re
 import subprocess
 import sys
 
-from . import risk
+from . import risk, scan
 from .gitdiff import GitError, git
 from .secret_scan import state_dir
 
-FIELDS = "number,state,isDraft,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup"
+FIELDS = "number,url,isCrossRepository,state,isDraft,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup"
+GITHUB_REPO = re.compile(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$", re.I)
 OK_CHECK = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
 
@@ -58,7 +60,19 @@ def log(row: dict) -> None:
         pass
 
 
-def run(repo: str, pr: str, gh=default_gh) -> tuple[int, str]:
+def default_scan(repo: str, rng: str) -> dict:
+    return scan.run(repo, False, rng, policy=True)
+
+
+def same_repo(repo: str, pr_url: str) -> bool:
+    """origin (as configured, before any insteadOf) is the repository the PR lives in."""
+    url = git(repo, "config", "--get", "remote.origin.url", check=False).stdout.decode().strip()
+    mine = GITHUB_REPO.search(url)
+    theirs = re.search(r"github\.com/([^/]+/[^/]+)/pull/\d+", pr_url or "")
+    return bool(mine and theirs and mine.group(1).lower() == theirs.group(1).lower())
+
+
+def run(repo: str, pr: str, gh=default_gh, scan_fn=default_scan) -> tuple[int, str]:
     row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "pr": pr, "merged": False}
     try:
         code, out = gh(["pr", "view", pr, "--json", FIELDS], repo)
@@ -67,6 +81,8 @@ def run(repo: str, pr: str, gh=default_gh) -> tuple[int, str]:
         info = json.loads(out)
         sha, base, head_ref = info["headRefOid"], info["baseRefName"], info["headRefName"]
         row["head"] = sha
+        if info.get("isCrossRepository") or not same_repo(repo, info.get("url", "")):
+            raise LandError(f"PR {info.get('url')} is not from this repository's origin: land it by hand")
         remote = git(repo, "ls-remote", "origin", f"refs/heads/{head_ref}", check=False).stdout.decode().split()
         if not remote or remote[0] != sha:
             raise LandError(f"origin's {head_ref} is not the PR head {sha[:12]}: push it first")
@@ -82,6 +98,14 @@ def run(repo: str, pr: str, gh=default_gh) -> tuple[int, str]:
         if failing:
             refused.append(f"checks failing: {', '.join(failing)}")
         r = risk.assess(repo, f"origin/{base}", sha)
+        # the record matches content, not history: scan the PR's own commits too (a secret added and removed)
+        try:
+            s = scan_fn(repo, f"{r['base']}..{sha}")
+        except Exception as e:  # noqa: BLE001 - a scan that can't run is never a pass
+            raise LandError(f"scan of the PR commits failed: {e}") from e
+        if s.get("exit_code") != 0:
+            refused.append(f"scan of the PR commits: exit {s.get('exit_code')}, "
+                           f"{sum(f.get('status') in ('hard', 'needs_human', 'blocking') for f in s.get('findings', []))} finding(s)")
         row["tier"] = r["tier"]
         if r["tier"] != "low":
             refused.append(f"risk:{r['tier']}: " + "; ".join(r["reasons"]))

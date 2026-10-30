@@ -68,6 +68,13 @@ class RiskTest(unittest.TestCase):
         self.reviewed("tests/test_add.py", "def test_add():\n    assert 1 + 1 == 2\n")
         self.assertEqual(self.assess()["tier"], "low")
 
+    def test_code_under_docs_is_not_docs(self):
+        for path in ("docs/conf.py", "docs/build.sh", "docs/assets/app.js"):
+            with self.subTest(path=path):
+                self.git("switch", "-q", "-C", "feat", "main")
+                self.reviewed(path, "x = 1\n")
+                self.assertNotEqual(self.assess()["tier"], "low")
+
     def test_no_review_record_is_never_low(self):
         self.commit("docs/guide.md", "# Guide\n")
         r = self.assess()
