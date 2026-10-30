@@ -22,7 +22,7 @@ def _lines(name: str) -> list[str] | None:
     try:
         text = path.read_text()
     except FileNotFoundError:
-        return []
+        return None if path.is_symlink() else []  # a dangling link is a broken policy, not a missing one
     except (OSError, UnicodeDecodeError):
         return None
     return [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]

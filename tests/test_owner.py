@@ -56,6 +56,10 @@ class OwnerTest(unittest.TestCase):
             self.assertTrue(eot.sensitive(str(self.tmp)))
         self.assertFalse(deps.is_online(None, str(self.tmp)))
 
+    def test_dangling_client_roots_symlink_fails_closed(self):
+        (self.cfg / "client-roots.txt").symlink_to(self.tmp / "gone.txt")
+        self.assertTrue(owner.in_client_root(str(self.tmp)))
+
     def test_client_root_stays_offline_even_with_an_own_origin(self):
         clients = self.tmp / "clients"
         (clients / "fork").mkdir(parents=True)
