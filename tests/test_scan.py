@@ -143,6 +143,34 @@ class ScanTest(unittest.TestCase):
         self.assertRegex(f["id"], r"^sec-gitleaks-[0-9a-f]{12}$")
         self.assertEqual(os.stat(self.tmp / "state/hmac.key").st_mode & 0o777, 0o600)
 
+    def test_repo_gitleaksignore_and_config_dont_hide_a_hit(self):
+        # gitleaks reads <source>/.gitleaksignore even with --gitleaks-ignore-path set elsewhere
+        self.add_canary()
+        self.commit("add")
+        sha = self.git("rev-parse", "HEAD").strip()
+        self.add_canary("src/y.ts")
+        fps = [f"{sha}:src/x.ts:reviewloop-canary:21", "src/x.ts:reviewloop-canary:21", "src/y.ts:reviewloop-canary:21"]
+        (self.repo / ".gitleaksignore").write_text("\n".join(fps) + "\n")
+        (self.repo / ".gitleaks.toml").write_text('[allowlist]\npaths = ["src/.*"]\n')
+        for args in (["--staged"], ["--range", f"{sha}~1..{sha}"]):
+            rc, out = self.scan(*args)
+            self.assertEqual(rc, 1, args)
+            self.assertTrue(any(f["evidence"]["ref"].endswith(":reviewloop-canary") for f in out["findings"]), args)
+
+    def test_pre_commit_partial_commit_temp_index_is_scanned(self):
+        # `git commit <path>` hands the hook a temporary GIT_INDEX_FILE; the scan must read that index
+        hook = self.repo / ".git/hooks/pre-commit"
+        hook.write_text(f'#!/bin/sh\nexec "{BIN}" scan --staged >/dev/null\n')
+        hook.chmod(0o755)
+        self.write("src/x.ts", "export const v = 0;\n")
+        self.commit("clean x")
+        self.add_canary()
+        self.git("reset", "-q", "--", "src/x.ts")
+        for args in (["commit", "-q", "-m", "partial", "src/x.ts"], ["commit", "-q", "-a", "-m", "all"]):
+            p = subprocess.run(["git", *args], cwd=self.repo, env=self.env, capture_output=True, text=True)
+            self.assertNotEqual(p.returncode, 0, args)
+        self.assertEqual(self.git("log", "--format=%s"), "clean x\ninit\n")
+
     def test_generic_entropy_is_needs_human(self):
         v = entropy_value()
         self.secrets.append(v)
