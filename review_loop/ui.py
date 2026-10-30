@@ -252,7 +252,9 @@ def coverage_finding(changed: list[str], picked: int, available: int) -> dict | 
                       f"UI change not fully checked: {why}")
 
 
-def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | None = None, ask=None) -> dict:
+def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | None = None, ask=None,
+        full: bool = False) -> dict:
+    """full: every story at head, not only those near a changed file (`review-loop epic`)."""
     repo = gitdiff.git(repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
     head = gitdiff.verify_commit(repo, rev)
     base = gitdiff.git(repo, "merge-base", gitdiff.verify_commit(repo, base_ref), head).stdout.decode().strip()
@@ -277,7 +279,7 @@ def run(repo: str, base_ref: str, rev: str = "HEAD", static: tuple[str, str] | N
                 result["static"] = True  # a test hook: the gate never counts a static result
             else:
                 sites = (build_storybook(repo, base, nm, work, "base"), build_storybook(repo, head, nm, work, "head"))
-            near = nearby(stories(sites[1]), changed)
+            near = list(stories(sites[1])) if full else nearby(stories(sites[1]), changed)
             ids = near[:MAX_STORIES]
             result["stories"] = ids
             base_ids = [i for i in ids if i in stories(sites[0])]

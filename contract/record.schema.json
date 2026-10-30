@@ -140,7 +140,8 @@
       "enum": [
         "ticket",
         "intent",
-        "commits"
+        "commits",
+        "prd"
       ]
     },
     "workers": {
@@ -213,6 +214,160 @@
       "type": "array",
       "items": {
         "$ref": "finding.schema.json"
+      }
+    },
+    "epic": {
+      "description": "epic records only: what the epic review covered. Stored at <patch-id>/epic-<merge-base>/record.json.",
+      "type": "object",
+      "required": [
+        "slug",
+        "base",
+        "tickets",
+        "seams",
+        "chunks",
+        "checks",
+        "follow_ups"
+      ],
+      "properties": {
+        "slug": {
+          "type": "string",
+          "minLength": 1
+        },
+        "base": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "tickets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "commits",
+              "files"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "commits": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                }
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "seams": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "file",
+                  "symbol"
+                ]
+              }
+            }
+          }
+        },
+        "chunks": {
+          "description": "Cover `git diff --name-only <merge-base> <head>` exactly once; a file split into parts has `part: [k, n]`.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "paths",
+              "lines",
+              "review"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "lines": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "review": {
+                "type": "string"
+              },
+              "part": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "not_applicable",
+                  "skipped",
+                  "passed",
+                  "failed",
+                  "needs_human",
+                  "informational"
+                ]
+              }
+            }
+          }
+        },
+        "follow_ups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "same_family_verify": {
+          "description": "Findings no verifier of the other family could check.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "duplicates": {
+          "description": "Kept finding id -> ids from other chunks merged into it (same lens, overlapping first site).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       }
     },
     "outcome": {
