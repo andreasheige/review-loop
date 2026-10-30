@@ -1,10 +1,10 @@
 """review-loop sweep: the whole-repo checks no diff scan sees. Report only, no model.
 
 usage: review-loop sweep [--if-due] [--repo DIR]
-       review-loop sweep --digest [ROOT]...        (default roots: ~/Dev ~/Knowit)
+       review-loop sweep --digest [ROOT]...        (default roots: ~/Dev and the client roots)
 
 Checks, each recorded with its own status (ok, findings, skipped, error):
-  osv        osv-scanner over the repo's lockfiles; client repos (origin not ours, Decision 8) only with the
+  osv        osv-scanner over the repo's lockfiles; client repos (origin not ours) only with the
              offline database, never a network call
   gitleaks   the commits since the last sweep (all history on the first), pinned binary, no values stored
   workflows  zizmor (offline: no token is given) and actionlint over .github/workflows
@@ -16,7 +16,7 @@ Checks, each recorded with its own status (ok, findings, skipped, error):
              default-branch runs only; an empty, unreadable or non-Trivy report is an error (a scan that writes
              nothing passes silently otherwise);
              no Dockerfile -> not_applicable
-  sast       skipped until there are own Semgrep rules (Decision 7)
+  sast       skipped until there are own Semgrep rules
   machine    at most once per 7 days: the global core.hooksPath still points at the global hooks dir
 
 --if-due runs only when this repo's last sweep is over 7 days old (or there is none), no other sweep of it is
@@ -42,7 +42,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from . import deps, gitdiff
+from . import deps, gitdiff, owner
 from .secret_scan import Gitleaks, state_dir
 from .tools import SAFE_PATH, ToolError, resolve, write_safely
 
@@ -374,7 +374,7 @@ def sweep(repo: str) -> dict:
         "workflows": check_workflows(repo),
         "hooks": check_hooks(repo, common),
         "image": check_image(repo, osv),
-        "sast": {"status": "skipped", "why": "no own Semgrep rules yet (Decision 7)"},
+        "sast": {"status": "skipped", "why": "no own Semgrep rules yet"},
     }
     if checks["gitleaks"]["status"] != "error" and head:
         checks["gitleaks"]["through"] = head
@@ -427,7 +427,7 @@ def digest(roots: list[Path]) -> str:
 
 def main(argv: list[str]) -> int:
     if "--digest" in argv:
-        roots = [Path(a) for a in argv if a != "--digest"] or [Path.home() / "Dev", Path.home() / "Knowit"]
+        roots = [Path(a) for a in argv if a != "--digest"] or [Path.home() / "Dev", *owner.client_roots()]
         sys.stdout.write(digest(roots))
         return 0
     repo = argv[argv.index("--repo") + 1] if "--repo" in argv else "."

@@ -1,10 +1,10 @@
 """D3: added/changed resolved versions in package-lock.json (v2/v3) and uv.lock.
 
-Online (origin github.com/andreasheige/* or no origin): OSV MAL-* → hard dep-mal; other OSV ids (known CVEs) →
-advisory dep-vuln (Decision 6: other CVEs advise); missing from the public registry → hard dep-nonexistent; any
+Online (an own origin per owner.py, or no origin): OSV MAL-* → hard dep-mal; other OSV ids (known CVEs) →
+advisory dep-vuln (other CVEs advise); missing from the public registry → hard dep-nonexistent; any
 lookup error or timeout → needs_human. Everywhere, no network needed: a package whose new version is lower than
-every old version of it → needs_human dep-downgrade (a downgrade can bring back fixed vulnerabilities). Other origins (client repos,
-Decision 8) make no network call: osv-scanner --offline against its local DB if present, else needs_human.
+every old version of it → needs_human dep-downgrade (a downgrade can bring back fixed vulnerabilities). Other origins (client repos)
+make no network call: osv-scanner --offline against its local DB if present, else needs_human.
 The network layer is injectable (Net) so tests run offline.
 """
 from __future__ import annotations
@@ -21,12 +21,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import VERSION
+from . import VERSION, owner
 from .normalise import finding, sha1
 from .tools import ToolError, resolve
 
 LOCKFILES = {"package-lock.json": "npm", "uv.lock": "PyPI"}
-OWN_ORIGIN = re.compile(r"github\.com[:/]andreasheige/")
 NPM_PUBLIC = "https://registry.npmjs.org/"
 PYPI_PUBLIC = {"https://pypi.org/simple", "https://pypi.org/simple/"}
 TIMEOUT = 3.0
@@ -125,7 +124,7 @@ def changed(old: str | None, new: str, eco: str) -> dict:
 
 
 def is_online(origin: str | None) -> bool:
-    return origin is None or bool(OWN_ORIGIN.search(origin))
+    return owner.own_origin(origin)
 
 
 def registry_url(eco: str, name: str, version: str) -> str:

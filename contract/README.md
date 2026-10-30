@@ -88,12 +88,14 @@ Keys: EOT records use the `-U0` patch-id against `origin/<base>` (`merge_base: n
 
 | Where | Who writes | Holds |
 |---|---|---|
-| `~/.config/review-loop/config.toml` | Andreas only | security policy, roles → `{harness, model}`, per-remote vendor allow-list, rule classes and their block/warn mode |
-| `~/.config/review-loop/tools.lock` | Andreas only | scanner absolute paths, versions, sha256 |
+| `~/.config/review-loop/config.toml` | the human owner only | security policy, roles → `{harness, model}`, per-remote vendor allow-list, rule classes and their block/warn mode |
+| `~/.config/review-loop/tools.lock` | the human owner only | scanner absolute paths, versions, sha256 |
+| `~/.config/review-loop/owner-origins.txt` | the human owner only | origin prefixes that count as yours (e.g. `github.com/<you>/`); other origins never get online dependency lookups. Missing: only repos without a remote |
+| `~/.config/review-loop/client-roots.txt` | the human owner only | directories holding client repos: treated as sensitive and swept by default. Missing: none |
 | `<repo>/.review-loop.toml` | repo | test/lint commands, protected test globs, base branch, `vendors` restriction (planned: no TOML reader on Python 3.9 yet) |
-| `<repo>/.git/config` `review-loop.*` | Andreas | opt-ins, read with `--local` only: `gate` (review records at push), `ui-required` (UI result at push), `design-tokens` (lint), `sensitive` (personal-data line; ~/Knowit repos are sensitive anyway) |
+| `<repo>/.git/config` `review-loop.*` | the human owner | opt-ins, read with `--local` only: `gate` (review records at push), `ui-required` (UI result at push), `design-tokens` (lint), `sensitive` (personal-data line; repos under a client root are sensitive anyway) |
 
-`.review-loop.toml` can only add strictness. Any change to it is itself NEEDS_HUMAN (`control-weakening`). So a repo can narrow `vendors` but never widen them. Allowing a new vendor for a client repo (e.g. OpenAI as the non-author family) is a global-config entry keyed by remote URL (Decision 8 in the plan).
+`.review-loop.toml` can only add strictness. Any change to it is itself NEEDS_HUMAN (`control-weakening`). So a repo can narrow `vendors` but never widen them. Allowing a new vendor for a client repo (e.g. OpenAI as the non-author family) is a global-config entry keyed by remote URL.
 
 ## Decisions this contract assumes
 

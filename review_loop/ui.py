@@ -18,7 +18,7 @@ Compared with base: a new serious or critical axe violation, or a new keyboard t
 minor or moderate one -> needs_human; where base didn't load, needs_human; no nearby story, or more than
 MAX_STORIES -> needs_human (ui-coverage), never a silent pass; a story whose screenshot changed -> needs_human (ui-visual: maybe
 intended, a human looks); anything already on base -> advisory, pre-existing (backlog). The result goes to
-<git-common-dir>/review-loop/<patch-id>/ui.json for the push gate (plan 7.5). Exit 0 pass, 1 block,
+<git-common-dir>/review-loop/<patch-id>/ui.json for the push gate. Exit 0 pass, 1 block,
 2 needs_human, 3 error.
 
 Known limits (security review 2026-10-29): the Storybook build runs head's own .storybook config and addons

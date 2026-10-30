@@ -1,11 +1,11 @@
-"""review-loop land <pr> (plan 8.8): the only way an agent merges, and only a risk:low PR.
+"""review-loop land <pr>: the only way an agent merges, and only a risk:low PR.
 
 The tier is recomputed here (risk.assess) on the PR's head as GitHub has it, against a freshly fetched base: a
 label, the PR text or the local checkout never count. Low also means a clean eot/recheck record for exactly
 that content. The PR must be open, not a draft, mergeable, with no pending or failing checks. The merge is a
 rebase-merge pinned with --match-head-commit, so a push after the check makes GitHub refuse it.
 
-Everything else is refused with "waiting for Andreas" and the reasons. Each run is a line in <state>/land.jsonl.
+Everything else is refused with "waiting for a human" and the reasons. Each run is a line in <state>/land.jsonl.
 Exit codes: 0 merged, 1 refused, 3 tool error. A bare `gh pr merge` stays denied for agents by the guard.
 Known limit (Level 1): this file lives in an agent-writable checkout; land.jsonl is the audit trail.
 """
@@ -112,7 +112,7 @@ def run(repo: str, pr: str, gh=default_gh, scan_fn=default_scan) -> tuple[int, s
         if refused:
             row["refused"] = refused
             log(row)
-            return 1, "Not landing; waiting for Andreas to review and merge:\n" + "\n".join(f"  - {x}" for x in refused)
+            return 1, "Not landing; waiting for a human to review and merge:\n" + "\n".join(f"  - {x}" for x in refused)
         code, out = gh(["pr", "merge", pr, "--rebase", "--match-head-commit", sha], repo)
         if code:
             raise LandError(f"gh pr merge failed: {out.strip()[:200]}")

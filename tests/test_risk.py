@@ -1,4 +1,4 @@
-"""Fixture tests for `review-loop risk` (plan 8.7: how much review a PR needs, decided in code).
+"""Fixture tests for `review-loop risk` (how much review a PR needs, decided in code).
 
 usage: python3 -m unittest tests.test_risk -v      (from the repo root)
 """

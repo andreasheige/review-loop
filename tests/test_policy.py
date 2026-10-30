@@ -63,7 +63,7 @@ class PolicyTest(RepoCase):
         self.commit("feat: snapshot view")
         self.assertNotIn("ui-baseline", self.rules(self.scan()))
 
-    # design-token lint (plan 7.3)
+    # design-token lint
     def design(self, files):
         for path, text in files.items():
             self.write(path, text)
