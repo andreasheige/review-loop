@@ -63,6 +63,8 @@ Stable across `--staged`, `--range` and rebase: no line number or commit SHA.
 $(git rev-parse --git-common-dir)/review-loop/      never committed
   <patch-id>/round-<n>/record.json                   record.schema.json
   <patch-id>/round-<n>/{sarif,prompts,repro}/        raw artifacts, scrubbed of secrets
+  <patch-id>/epic-<merge-base>/record.json          `review-loop epic` (record.schema.json, with `epic`)
+  <patch-id>/epic-<merge-base>/{prompts,follow-ups}/ finder/verifier prompts, one follow-up ticket per kept finding
   <patch-id>/ui.json                                 `review-loop ui` result: {head, base, findings, outcome[, static]}
   accepts.jsonl                                      accept.schema.json, one per line
   sweep.json                                         last `review-loop sweep`: {ts, head, checks, ms} (report only)

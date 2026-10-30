@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "command": "epic",
+  "key": {
+    "patch_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_ref": "main",
+    "merge_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "round": 1,
+  "created_at": "2026-10-30T12:00:00+00:00",
+  "head": "cccccccccccccccccccccccccccccccccccccccc",
+  "branch": "epic/doc-sharing",
+  "author_family": "claude",
+  "intent_source": "prd",
+  "workers": [
+    {
+      "role": "finder",
+      "family": "gpt",
+      "harness": "copilot",
+      "model": "gpt-6.1-sol",
+      "wall_seconds": 120,
+      "tokens": 0
+    },
+    {
+      "role": "verifier",
+      "family": "claude",
+      "harness": "claude",
+      "model": "sonnet",
+      "wall_seconds": 60,
+      "tokens": 50000
+    }
+  ],
+  "tools": {
+    "gitleaks": "8.28.0"
+  },
+  "reviewed_paths": [
+    "src/lib/ids.ts",
+    "src/sharing/routes.ts"
+  ],
+  "findings": [
+    {
+      "id": "rev-0123456789ab",
+      "reasoning": "routes.ts:19 mints the share token with newId(); ids.ts:10-13 (another ticket) made newId() timestamp + worker + sequence.",
+      "lens": "security",
+      "surface": "code",
+      "cwe": "CWE-330",
+      "title": "Share tokens are predictable",
+      "sites": [
+        {
+          "path": "src/sharing/routes.ts",
+          "start_line": 19,
+          "end_line": 19
+        },
+        {
+          "path": "src/lib/ids.ts",
+          "start_line": 10,
+          "end_line": 13
+        }
+      ],
+      "failure_scenario": {
+        "input": "create two links a second apart",
+        "expected": "unrelated tokens",
+        "actual": "tokens differ only in the timestamp and sequence"
+      },
+      "evidence": {
+        "kind": "trace",
+        "ref": null
+      },
+      "rule_class": null,
+      "introduced_by": "diff",
+      "status": "blocking",
+      "verification": {
+        "verdict": "confirmed",
+        "reasoning": "ids.ts:10-13 builds the id from Date.now().",
+        "counter_evidence": null,
+        "family": "claude"
+      }
+    }
+  ],
+  "epic": {
+    "slug": "doc-sharing",
+    "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "tickets": [
+      {
+        "id": "DS-2",
+        "merge": true,
+        "ref": "ticket/DS-2-versions",
+        "commits": [
+          "dddddddddddddddddddddddddddddddddddddddd"
+        ],
+        "files": [
+          "src/lib/ids.ts"
+        ]
+      },
+      {
+        "id": "DS-3",
+        "merge": true,
+        "ref": "ticket/DS-3-share-links",
+        "commits": [
+          "cccccccccccccccccccccccccccccccccccccccc"
+        ],
+        "files": [
+          "src/sharing/routes.ts"
+        ]
+      }
+    ],
+    "seams": [
+      {
+        "kind": "symbol",
+        "symbol": "newId",
+        "defined_in": {
+          "ticket": "DS-2",
+          "path": "src/lib/ids.ts"
+        },
+        "used_in": [
+          {
+            "ticket": "DS-3",
+            "path": "src/sharing/routes.ts"
+          }
+        ]
+      }
+    ],
+    "graphify": false,
+    "chunks": [
+      {
+        "id": "c01",
+        "paths": [
+          "src/lib/ids.ts",
+          "src/sharing/routes.ts"
+        ],
+        "lines": 54,
+        "review": "finder",
+        "findings": 1
+      }
+    ],
+    "checks": {
+      "journey": {
+        "status": "not_applicable",
+        "why": "no journey script"
+      },
+      "threat_model": {
+        "status": "not_applicable",
+        "why": "repo not marked sensitive"
+      },
+      "ui": {
+        "status": "not_applicable",
+        "why": "no UI files changed"
+      },
+      "image": {
+        "status": "not_applicable",
+        "why": "no Dockerfile or Containerfile at the head"
+      }
+    },
+    "follow_ups": [
+      "follow-ups/fu-01-rev-0123456789ab.md"
+    ],
+    "same_family_verify": [],
+    "wall_seconds": 300.0
+  },
+  "outcome": {
+    "exit_code": 1,
+    "summary": "blocked"
+  }
+}
