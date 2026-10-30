@@ -101,7 +101,7 @@ def run(repo: str, pr: str, gh=default_gh, scan_fn=default_scan) -> tuple[int, s
         # the record matches content, not history: scan the PR's own commits too (a secret added and removed)
         try:
             s = scan_fn(repo, f"{r['base']}..{sha}")
-        except Exception as e:  # noqa: BLE001 - a scan that can't run is never a pass
+        except Exception as e:  # any failure to scan is a tool error, never a pass
             raise LandError(f"scan of the PR commits failed: {e}") from e
         if s.get("exit_code") != 0:
             refused.append(f"scan of the PR commits: exit {s.get('exit_code')}, "

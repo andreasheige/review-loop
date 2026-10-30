@@ -69,7 +69,7 @@ class RiskTest(unittest.TestCase):
         self.assertEqual(self.assess()["tier"], "low")
 
     def test_code_under_docs_is_not_docs(self):
-        for path in ("docs/conf.py", "docs/build.sh", "docs/assets/app.js"):
+        for path in ("docs/conf.py", "docs/build.sh", "docs/assets/app.js", "AUTHORS", "NOTICE", "LICENSE.sh"):
             with self.subTest(path=path):
                 self.git("switch", "-q", "-C", "feat", "main")
                 self.reviewed(path, "x = 1\n")
