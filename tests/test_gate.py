@@ -261,6 +261,16 @@ class GateTest(unittest.TestCase):
         home_mode.write_text("blocc\n")
         self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])[0], 1)
 
+    def test_docs_or_lockfile_only_push_needs_no_review_record(self):
+        self.git("config", "review-loop.gate", "true")
+        self.mode_file.write_text("block\n")
+        sha = self.commit("notes/today.md", "# Today\n\nNotes.\n")
+        self.assertEqual(self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"]), (0, ""))
+        sha = self.commit("src/ok.py", "x = 1\n")  # code in the same push: the record is needed again
+        rc, err = self.gate([f"refs/heads/feat {sha} refs/heads/feat {ZERO}"])
+        self.assertEqual(rc, 1)
+        self.assertIn("no review record", err)
+
     def test_review_check_is_off_without_the_config(self):
         sha = self.commit("src/ok.py", "x = 1\n")
         self.mode_file.write_text("block\n")
