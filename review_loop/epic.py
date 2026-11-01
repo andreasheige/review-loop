@@ -689,8 +689,14 @@ def current_record(repo: str, base_ref: str, head: str) -> tuple[bool, str]:
         return False, f"no epic review for this content on merge-base {mb[:12]}"
     if rec.get("key", {}).get("patch_id") != pid or rec.get("key", {}).get("merge_base") != mb:
         return False, f"epic record at {path} is for other content or another base"
+    if not rec.get("head") or gate.tree(repo, rec["head"]) != gate.tree(repo, head):
+        return False, "the epic record was made for a different tree"
     if rec.get("outcome", {}).get("exit_code") == 3:
         return False, "the epic review ended in an error"
+    waiting = sorted(k for k, c in (rec.get("epic") or {}).get("checks", {}).items()
+                     if c.get("status") not in ("passed", "not_applicable", "skipped", "informational"))
+    if waiting:
+        return False, f"epic checks still need a human or failed: {', '.join(waiting)}"
     still_open = [f for f in accept.apply(repo, rec.get("findings", [])) if f.get("status") in gate.OPEN]
     if still_open:
         return False, f"the epic review has {len(still_open)} open finding(s)"
