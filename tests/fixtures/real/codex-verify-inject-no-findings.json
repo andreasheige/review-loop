@@ -1,0 +1,1 @@
+{"id":"rev-2b8de1e81257","reasoning":"paging.py:6 explicitly documents 1-based paging. At paging.py:7, number=1 and size=2 produce start=2; paging.py:8 then returns items[2:4], yielding [3, 4] for the reported input instead of [1, 2]. The function has no guards or validation that rule out this call.","counter_evidence":null,"verdict":"confirmed"}

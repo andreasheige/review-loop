@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -219,9 +221,16 @@ def parse_claude(stdout: str) -> tuple:
 
 
 CLAUDE_SETTINGS = {"permissions": {"deny": ["Read(**/.env*)"]}}
-# read-only: :minimal (system and runtime paths) plus the workspace, nothing else under $HOME; no network
-CODEX_PROFILE = ['-c', 'default_permissions="review-loop"',
-                 '-c', 'permissions.review-loop.filesystem={":minimal"="read",":workspace_roots"={"."="read","**/.env*"="deny"}}']
+def codex_profile() -> list[str]:
+    """Read-only: :minimal (system and runtime paths), the codex binary's own dirs, the workspace; nothing else under
+    $HOME; no network. Codex re-execs its binary under sandbox-exec, and :minimal doesn't cover a Homebrew install
+    (exit 71), so the dirs of the `codex` on PATH and of its real path are readable too."""
+    exe = shutil.which("codex")
+    dirs = sorted({str(Path(exe).parent), str(Path(os.path.realpath(exe)).parent)}) if exe else []
+    extra = "".join(f'"{d}"="read",' for d in dirs)
+    return ['-c', 'default_permissions="review-loop"',
+            '-c', 'permissions.review-loop.filesystem={":minimal"="read",' + extra +
+                  '":workspace_roots"={"."="read","**/.env*"="deny"}}']
 
 
 def run_claude(prompt: str, schema: dict, cwd: str, model: str, runner: Runner = default_runner, check=None) -> dict:
@@ -267,7 +276,7 @@ def run_codex(prompt: str, schema: dict, cwd: str, model: str | None = None, run
         schema_file, out_file = Path(td) / "schema.json", Path(td) / "out.json"
         schema_file.write_text(json.dumps(schema))
         # the profile replaces -s read-only: it also denies $HOME outside the workspace (verified with codex sandbox)
-        argv = ["codex", "exec", *CODEX_PROFILE, "--ignore-user-config", "--ignore-rules", "--ephemeral",
+        argv = ["codex", "exec", *codex_profile(), "--ignore-user-config", "--ignore-rules", "--ephemeral",
                 "--skip-git-repo-check", "--output-schema", str(schema_file), "-o", str(out_file), "--json"]
         argv += ["-m", model] if model else []
         argv.append("-")  # prompt on stdin: a diff can exceed the argv size limit

@@ -2,9 +2,10 @@
 
 usage: python3 -m unittest tests.test_workers -v      (from the repo root)
 
-Fakes stand in for `claude` and `codex` everywhere except the recorder: REVIEW_LOOP_RECORD=1 runs the Claude adapter
-for real (model sonnet) on the synthetic sqli and inject-no-findings repos and rewrites tests/fixtures/real/claude-*.json.
-The stored files are raw `claude -p --output-format json` stdout over synthetic code only.
+Fakes stand in for `claude` and `codex` everywhere except the recorders: REVIEW_LOOP_RECORD=1 runs the Claude adapter
+for real (model sonnet) on the synthetic sqli and inject-no-findings repos and rewrites tests/fixtures/real/claude-*.json;
+REVIEW_LOOP_RECORD=codex does the same with the Codex adapter (default model) into codex-*.json (the -o file) and
+codex-*.jsonl (stdout). The stored files are raw tool output over synthetic code only.
 """
 import hashlib
 import io
@@ -232,6 +233,24 @@ class Codex(unittest.TestCase):
         self.assertNotEqual(home, str(Path.home() / ".codex"))
         self.assertFalse(Path(home).exists())  # scratch home is gone after the run
 
+    def test_profile_can_read_the_codex_binary_dirs_and_nothing_under_home(self):
+        # codex re-execs itself under sandbox-exec; :minimal alone doesn't cover a Homebrew install (exit 71)
+        with tempfile.TemporaryDirectory() as td:
+            real = Path(td) / "Caskroom/codex/9.9/bin/codex"
+            real.parent.mkdir(parents=True)
+            real.write_text("")
+            link = Path(td) / "bin/codex"
+            link.parent.mkdir()
+            link.symlink_to(real)
+            with mock.patch.object(workers.shutil, "which", return_value=str(link)):
+                fs = next(c for c in workers.codex_profile() if c.startswith("permissions.review-loop.filesystem="))
+        self.assertIn(f'"{link.parent}"="read"', fs)
+        self.assertIn(f'"{Path(os.path.realpath(real)).parent}"="read"', fs)
+        self.assertNotIn(f'"{Path.home()}"', fs)
+        with mock.patch.object(workers.shutil, "which", return_value=None):
+            fs = next(c for c in workers.codex_profile() if c.startswith("permissions.review-loop.filesystem="))
+        self.assertEqual(fs.count('="read"'), 2)  # :minimal and the workspace only
+
     def test_malformed_then_valid(self):
         fake = FakeRunner(codex_writes("{"), codex_writes(json.dumps(GOOD_VERIFY)))
         r = workers.run_codex("PROMPT", VERIFIER, "/tmp", None, fake)
@@ -279,15 +298,27 @@ def finding_id(f):
     return "rev-" + hashlib.sha1(f"{f['lens']}|{f['sites'][0]['path']}|{f['title']}".encode()).hexdigest()[:12]
 
 
-def record_real():
-    """Run the Claude adapter for real and store raw stdout under tests/fixtures/real/."""
+def record_real(harness="claude"):
+    """Run the Claude or Codex adapter for real and store its raw output under tests/fixtures/real/."""
     REAL.mkdir(parents=True, exist_ok=True)
     raw = []
 
     def recorder(argv, stdin, cwd, timeout, env):
         p = workers.default_runner(argv, stdin, cwd, timeout, env)
-        raw.append(p.stdout)
+        out = Path(argv[argv.index("-o") + 1]) if "-o" in argv else None
+        raw.append((p.stdout, out.read_text() if out and out.exists() else None))
         return p
+
+    def store(name):
+        stdout, out_file = raw[-1]
+        if harness == "codex":
+            (REAL / f"{name}.json").write_text(out_file or "")
+            (REAL / f"{name}.jsonl").write_text(stdout)
+        else:
+            (REAL / f"{name}.json").write_text(stdout)
+
+    run = workers.run_codex if harness == "codex" else workers.run_claude
+    model = None if harness == "codex" else "sonnet"
 
     with tempfile.TemporaryDirectory(prefix="review-loop-real-") as td:
         subprocess.run(["bash", str(ROOT / "golden/synthetic/build.sh"), td], check=True, capture_output=True)
@@ -296,12 +327,12 @@ def record_real():
             git = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, text=True).stdout  # noqa: E731
             diff = git("diff", "HEAD~1", "HEAD")
             paths = git("diff", "--name-only", "HEAD~1", "HEAD").split()
-            found = workers.run_claude(workers.find_prompt(intent, diff, paths), FINDER, repo, "sonnet", recorder)
-            (REAL / f"claude-find-{case}.json").write_text(raw[-1])
+            found = run(workers.find_prompt(intent, diff, paths), FINDER, repo, model, recorder)
+            store(f"{harness}-find-{case}")
             if found["output"]["findings"]:
                 f = found["output"]["findings"][0]
-                workers.run_claude(workers.verify_prompt(finding_id(f), f, diff), VERIFIER, repo, "sonnet", recorder)
-                (REAL / f"claude-verify-{case}.json").write_text(raw[-1])
+                run(workers.verify_prompt(finding_id(f), f, diff), VERIFIER, repo, model, recorder)
+                store(f"{harness}-verify-{case}")
 
 
 class RealOutput(unittest.TestCase):
@@ -309,6 +340,8 @@ class RealOutput(unittest.TestCase):
     def setUpClass(cls):
         if os.environ.get("REVIEW_LOOP_RECORD") == "1":
             record_real()
+        if os.environ.get("REVIEW_LOOP_RECORD") == "codex":
+            record_real("codex")
 
     def replay(self, path, schema):
         r = workers.run_claude("P", schema, "/tmp", "sonnet", FakeRunner(path.read_text()))
@@ -326,14 +359,31 @@ class RealOutput(unittest.TestCase):
                 self.assertEqual(verdict["id"], finding_id(found["findings"][0]))
 
     def test_real_outputs_hold_no_key_material(self):
-        for path in REAL.glob("*.json"):
+        for path in [*REAL.glob("*.json"), *REAL.glob("*.jsonl")]:
             text = path.read_text()
             self.assertNotRegex(text, r"BEGIN [A-Z ]*PRIVATE KEY|sk-ant-|ghp_|AKIA[0-9A-Z]{16}", path.name)
 
-    @unittest.skip("codex exec fails with 'You hit your spend cap' (workspace quota until next month); "
-                   "the codex adapter is covered by fakes until then")
+    def replay_codex(self, name, schema):
+        stdout, payload = (REAL / f"{name}.jsonl").read_text(), (REAL / f"{name}.json").read_text()
+
+        def run(argv):
+            Path(argv[argv.index("-o") + 1]).write_text(payload)
+            return done(argv, stdout)
+
+        r = workers.run_codex("P", schema, "/tmp", None, FakeRunner(run))
+        self.assertEqual(r["attempts"], 1)
+        self.assertEqual(workers.validate(r["output"], schema), [])
+        self.assertTrue(r["usage"], "token usage parsed from the real --json stdout")
+        return r
+
     def test_codex_real_output(self):
-        pass
+        for case, (_, path) in CASES.items():
+            with self.subTest(case=case):
+                found = self.replay_codex(f"codex-find-{case}", FINDER)["output"]
+                self.assertTrue(found["findings"], "the planted bug should be found")
+                self.assertIn(path, found["reviewed_paths"])
+                verdict = self.replay_codex(f"codex-verify-{case}", VERIFIER)["output"]
+                self.assertEqual(verdict["id"], finding_id(found["findings"][0]))
 
 
 if __name__ == "__main__":
