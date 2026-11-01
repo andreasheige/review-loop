@@ -251,6 +251,13 @@ class Codex(unittest.TestCase):
             fs = next(c for c in workers.codex_profile() if c.startswith("permissions.review-loop.filesystem="))
         self.assertEqual(fs.count('="read"'), 2)  # :minimal and the workspace only
 
+    def test_profile_never_grants_home_its_ancestors_or_anything_under_it(self):
+        home = Path.home()
+        for exe in (home / "codex", home / ".local/bin/codex", Path("/codex"), home.parent / "codex"):
+            with mock.patch.object(workers.shutil, "which", return_value=str(exe)):
+                fs = next(c for c in workers.codex_profile() if c.startswith("permissions.review-loop.filesystem="))
+            self.assertEqual(fs.count('="read"'), 2, exe)
+
     def test_malformed_then_valid(self):
         fake = FakeRunner(codex_writes("{"), codex_writes(json.dumps(GOOD_VERIFY)))
         r = workers.run_codex("PROMPT", VERIFIER, "/tmp", None, fake)
