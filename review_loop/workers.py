@@ -226,7 +226,11 @@ def codex_profile() -> list[str]:
     $HOME; no network. Codex re-execs its binary under sandbox-exec, and :minimal doesn't cover a Homebrew install
     (exit 71), so the dirs of the `codex` on PATH and of its real path are readable too."""
     exe = shutil.which("codex")
-    dirs = sorted({str(Path(exe).parent), str(Path(os.path.realpath(exe)).parent)}) if exe else []
+    home = Path.home().resolve()
+    candidates = {Path(exe).parent, Path(os.path.realpath(exe)).parent} if exe else set()
+    # a whole-dir grant: never $HOME, anything under it, or an ancestor of it (/, /Users); codex there fails closed
+    dirs = sorted(str(d) for d in candidates
+                  if not (d.resolve() == home or d.resolve().is_relative_to(home) or home.is_relative_to(d.resolve())))
     extra = "".join(f'"{d}"="read",' for d in dirs)
     return ['-c', 'default_permissions="review-loop"',
             '-c', 'permissions.review-loop.filesystem={":minimal"="read",' + extra +
