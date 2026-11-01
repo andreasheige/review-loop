@@ -3,6 +3,7 @@
        review-loop eot [--base REF] [--rev REV] [--ticket PATH | --intent TEXT] [--finder H[:M]]... [--verifier H[:M]]...
        review-loop recheck   (same flags as eot; only what changed since the last record, max 2 rechecks)
        review-loop epic <slug> [--base REF] [--prd PATH | --intent TEXT] [--tickets DIR] [--finder H[:M]]... [--verifier H[:M]]...
+       review-loop epic <slug> --check [--base REF]   (exit 0 when epic/<slug> has a current record with nothing open)
        review-loop label <finding-id> fixed|wrong|intentional|noise [--evidence TEXT]
        review-loop stats [--repo PATH]... [--csv PATH]
        review-loop sweep [--if-due] [--repo DIR] | --digest [ROOT]...   (whole-repo checks, report only)
