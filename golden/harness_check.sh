@@ -24,7 +24,9 @@ for h in "$@"; do
     copilot)     (cd "$repo" && copilot -p "$prompt" --allow-all-tools --add-dir "$here/..") ;;
     pi)          (cd "$repo" && pi -p "$prompt") ;;
     antigravity) (cd "$repo" && agy -p "$prompt" --dangerously-skip-permissions) ;;
-    codex)       (cd "$repo" && codex exec -s workspace-write "$prompt") ;;
+    # outside Codex's sandbox, as an approved escalation would be: workspace-write makes .git read-only and has no
+    # network, so eot can't write its record or reach a worker. The user's hooks (the guard) still load.
+    codex)       (cd "$repo" && codex exec --dangerously-bypass-approvals-and-sandbox "$prompt") ;;
     *) echo "unknown harness $h" >&2; exit 3 ;;
   esac >"$out/$h.out" 2>&1 || true
 done
