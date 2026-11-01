@@ -17,6 +17,9 @@ CLI: `$REVIEW_LOOP_BIN`, else `review-loop` on `PATH`, else `~/Dev/review-loop/b
 2. `review-loop eot --ticket <ticket.md> --format text` (or `--intent "<one line>"`; default base is
    `origin/HEAD`, pass `--base <ref>` for an epic branch). It scans first, then a finder and a verifier from the other
    model family review `merge-base..HEAD` in a read-only scratch worktree.
+   In a sandboxed harness (Codex `workspace-write` makes `.git` read-only and has no network), eot can't write its
+   record or reach the reviewers: run the `review-loop` command with escalated permissions (ask the user to approve
+   running it outside the sandbox), as for `git commit`. An exit 3 from the sandbox is never a pass.
 3. Act on the exit code:
    - `0` — done. It means no finding was reported, never "secure".
    - `1` — fix each `blocking`/`hard` finding test-first, run the tests, commit, then
