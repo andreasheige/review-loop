@@ -73,14 +73,15 @@ class LandTest(unittest.TestCase):
             "command": "eot", "round": 1, "head": sha, "branch": "feat", "created_at": "2026-10-30T00:00:01+00:00",
             "findings": list(findings), "outcome": {"exit_code": exit_code}}))
 
-    def epic_record(self, sha, base_ref="main", findings=(), exit_code=0):
+    def epic_record(self, sha, base_ref="main", findings=(), exit_code=0, checks=None, head=None):
         mb = self.git("merge-base", base_ref, sha)
         pid = eot.patch_id(str(self.repo), mb, sha)
         d = self.repo / ".git" / "review-loop" / pid / f"epic-{mb}"
         d.mkdir(parents=True)
         (d / "record.json").write_text(json.dumps({
-            "command": "epic", "head": sha, "branch": "epic/x", "key": {"patch_id": pid, "merge_base": mb},
-            "created_at": "2026-11-01T00:00:01+00:00", "findings": list(findings), "outcome": {"exit_code": exit_code}}))
+            "command": "epic", "head": head or sha, "branch": "epic/x", "key": {"patch_id": pid, "merge_base": mb},
+            "created_at": "2026-11-01T00:00:01+00:00", "findings": list(findings), "outcome": {"exit_code": exit_code},
+            "epic": {"checks": checks or {"journey": {"status": "not_applicable"}, "image": {"status": "informational"}}}}))
 
     def epic_pr(self, path="docs/guide.md", text="# Guide\n", epic_reviewed=True):
         """A low-risk-looking change on epic/x (eot-reviewed, so only the epic check can refuse it)."""
@@ -179,7 +180,9 @@ class LandTest(unittest.TestCase):
 
     def test_epic_record_with_an_open_finding_or_an_error_is_refused(self):
         for kw in ({"findings": [{"id": "rev-1", "status": "blocking", "rule_class": None}], "exit_code": 1},
-                   {"exit_code": 3}):
+                   {"exit_code": 3},
+                   {"exit_code": 2, "checks": {"threat_model": {"status": "needs_human"}}},
+                   {"exit_code": 1, "checks": {"journey": {"status": "failed"}}}):
             with self.subTest(**{k: str(v)[:30] for k, v in kw.items()}):
                 self.git("switch", "-q", "-C", "feat", "main")
                 sha = self.commit("docs/guide.md", "# Guide\n" + str(kw))
@@ -191,6 +194,17 @@ class LandTest(unittest.TestCase):
                 self.assertEqual(code, 1, msg)
                 self.assertIn("epic review", msg)
                 self.assertEqual(gh.merged(), [])
+
+    def test_epic_record_for_another_tree_with_the_same_patch_id_is_refused(self):
+        sha = self.commit("docs/guide.md", "# Guide\n")
+        self.record(sha)
+        other = self.git("commit-tree", self.git("rev-parse", "main^{tree}"), "-p", "main", "-m", "other")
+        self.epic_record(sha, head=other)
+        self.git("push", "-q", "-f", "origin", "feat:refs/heads/epic/x")
+        gh = FakeGh(self.pr(sha, headRefName="epic/x"))
+        code, msg = self.land(gh)
+        self.assertEqual(code, 1, msg)
+        self.assertIn("epic review", msg)
 
     def test_epic_check_cli_reports_whether_the_record_is_current(self):
         from review_loop import epic
