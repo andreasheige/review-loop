@@ -1,0 +1,6 @@
+{
+  "id": "rev-0d904a529b2c",
+  "reasoning": "users.py:9 accepts a string without validation. users.py:10 interpolates it directly into SQL, and users.py:11 executes that SQL and returns all results. The supplied input produces SELECT id, name, email FROM users WHERE name LIKE '%' OR 1=1 --%'; the comment removes the trailing literal and OR 1=1 matches every row. No guard prevents this direct call. Apostrophes can also break the SQL literal.",
+  "counter_evidence": null,
+  "verdict": "confirmed"
+}
