@@ -73,6 +73,9 @@ class LandTest(unittest.TestCase):
             "command": "eot", "round": 1, "head": sha, "branch": "feat", "created_at": "2026-10-30T00:00:01+00:00",
             "findings": list(findings), "outcome": {"exit_code": exit_code}}))
 
+    FINISHED = {"journey": {"status": "not_applicable"}, "threat_model": {"status": "not_applicable"},
+                "ui": {"status": "not_applicable"}, "image": {"status": "informational"}}
+
     def epic_record(self, sha, base_ref="main", findings=(), exit_code=0, checks=None, head=None):
         mb = self.git("merge-base", base_ref, sha)
         pid = eot.patch_id(str(self.repo), mb, sha)
@@ -81,7 +84,7 @@ class LandTest(unittest.TestCase):
         (d / "record.json").write_text(json.dumps({
             "command": "epic", "head": head or sha, "branch": "epic/x", "key": {"patch_id": pid, "merge_base": mb},
             "created_at": "2026-11-01T00:00:01+00:00", "findings": list(findings), "outcome": {"exit_code": exit_code},
-            "epic": {"checks": checks or {"journey": {"status": "not_applicable"}, "image": {"status": "informational"}}}}))
+            "epic": {"checks": {**self.FINISHED, **(checks or {})}}}))
 
     def epic_pr(self, path="docs/guide.md", text="# Guide\n", epic_reviewed=True):
         """A low-risk-looking change on epic/x (eot-reviewed, so only the epic check can refuse it)."""
@@ -182,7 +185,8 @@ class LandTest(unittest.TestCase):
         for kw in ({"findings": [{"id": "rev-1", "status": "blocking", "rule_class": None}], "exit_code": 1},
                    {"exit_code": 3},
                    {"exit_code": 2, "checks": {"threat_model": {"status": "needs_human"}}},
-                   {"exit_code": 1, "checks": {"journey": {"status": "failed"}}}):
+                   {"exit_code": 1, "checks": {"journey": {"status": "failed"}}},
+                   {"exit_code": 0, "checks": {"ui": {"status": "something-new"}}}):
             with self.subTest(**{k: str(v)[:30] for k, v in kw.items()}):
                 self.git("switch", "-q", "-C", "feat", "main")
                 sha = self.commit("docs/guide.md", "# Guide\n" + str(kw))
@@ -194,6 +198,20 @@ class LandTest(unittest.TestCase):
                 self.assertEqual(code, 1, msg)
                 self.assertIn("epic review", msg)
                 self.assertEqual(gh.merged(), [])
+
+    def test_epic_review_that_stopped_before_its_checks_is_refused(self):
+        sha = self.commit("docs/guide.md", "# Guide\n")
+        self.record(sha)
+        self.epic_record(sha)
+        mb = self.git("merge-base", "main", sha)
+        path = next((self.repo / ".git" / "review-loop").glob(f"*/epic-{mb}/record.json"))
+        rec = json.loads(path.read_text())
+        rec["epic"]["checks"] = {}
+        path.write_text(json.dumps(rec))
+        self.git("push", "-q", "-f", "origin", "feat:refs/heads/epic/x")
+        code, msg = self.land(FakeGh(self.pr(sha, headRefName="epic/x")))
+        self.assertEqual(code, 1, msg)
+        self.assertIn("did not finish", msg)
 
     def test_epic_record_for_another_tree_with_the_same_patch_id_is_refused(self):
         sha = self.commit("docs/guide.md", "# Guide\n")

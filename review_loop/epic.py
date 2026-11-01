@@ -674,6 +674,9 @@ def other_family(finders: list[tuple[str, str | None]]) -> list[tuple[str, str |
     return out
 
 
+FINISHED_CHECKS = ("journey", "threat_model", "ui", "image")  # a run that stopped early (e.g. on a secret) lacks some
+
+
 def current_record(repo: str, base_ref: str, head: str) -> tuple[bool, str]:
     """(True, record path) when an epic record exists for exactly merge-base(base_ref, head)..head with nothing open
     after accepts; else (False, why). Keyed by (patch-id, merge-base): a rebase onto a moved base needs a new run."""
@@ -693,7 +696,11 @@ def current_record(repo: str, base_ref: str, head: str) -> tuple[bool, str]:
         return False, "the epic record was made for a different tree"
     if rec.get("outcome", {}).get("exit_code") == 3:
         return False, "the epic review ended in an error"
-    waiting = sorted(k for k, c in (rec.get("epic") or {}).get("checks", {}).items()
+    checks = (rec.get("epic") or {}).get("checks", {})
+    missing = sorted(set(FINISHED_CHECKS) - set(checks))
+    if missing:
+        return False, f"the epic review did not finish (no {', '.join(missing)} check)"
+    waiting = sorted(k for k, c in checks.items()
                      if c.get("status") not in ("passed", "not_applicable", "skipped", "informational"))
     if waiting:
         return False, f"epic checks still need a human or failed: {', '.join(waiting)}"
