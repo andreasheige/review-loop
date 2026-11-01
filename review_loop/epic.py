@@ -46,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import accept, eot, launcher, scan, secret_scan, ui, workers
+from . import accept, eot, gate, launcher, scan, secret_scan, ui, workers
 from .gitdiff import GitError, added_lines, git, verify_commit
 
 LIMIT = 300  # changed lines per chunk
@@ -674,6 +674,29 @@ def other_family(finders: list[tuple[str, str | None]]) -> list[tuple[str, str |
     return out
 
 
+def current_record(repo: str, base_ref: str, head: str) -> tuple[bool, str]:
+    """(True, record path) when an epic record exists for exactly merge-base(base_ref, head)..head with nothing open
+    after accepts; else (False, why). Keyed by (patch-id, merge-base): a rebase onto a moved base needs a new run."""
+    mb = git(repo, "merge-base", base_ref, head).stdout.decode().strip()
+    pid = eot.patch_id(repo, mb, head)
+    common = Path(repo, git(repo, "rev-parse", "--git-common-dir").stdout.decode().strip()).resolve()
+    path = common / "review-loop" / pid / f"epic-{mb}" / "record.json"
+    if any(p.is_symlink() for p in (path, path.parent, path.parent.parent)):
+        return False, f"epic record path is a symlink: {path}"
+    try:
+        rec = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False, f"no epic review for this content on merge-base {mb[:12]}"
+    if rec.get("key", {}).get("patch_id") != pid or rec.get("key", {}).get("merge_base") != mb:
+        return False, f"epic record at {path} is for other content or another base"
+    if rec.get("outcome", {}).get("exit_code") == 3:
+        return False, "the epic review ended in an error"
+    still_open = [f for f in accept.apply(repo, rec.get("findings", [])) if f.get("status") in gate.OPEN]
+    if still_open:
+        return False, f"the epic review has {len(still_open)} open finding(s)"
+    return True, str(path)
+
+
 def run(repo: str, slug: str, base_ref: str, *, prd=None, intent_text=None, tickets_dir=None, family=None,
         finders=None, verifiers=None, runner=workers.default_runner, journey_run=default_journey_runner,
         run_ui=None) -> tuple[dict, Path | None]:
@@ -927,7 +950,18 @@ def main(argv: list[str], runner=workers.default_runner, journey_run=default_jou
     ap.add_argument("--finder", action="append", type=eot.worker_spec, metavar="HARNESS[:MODEL]")
     ap.add_argument("--verifier", action="append", type=eot.worker_spec, metavar="HARNESS[:MODEL]")
     ap.add_argument("--format", choices=["json", "text"], default="json")
+    ap.add_argument("--check", action="store_true",
+                    help="no review: exit 0 if epic/<slug> has a current record with nothing open, else 1")
     args = ap.parse_args(argv)
+    if args.check:
+        try:
+            head = verify_commit(".", f"refs/heads/epic/{args.slug}")
+            ok, why = current_record(".", args.base or eot.default_base("."), head)
+        except (eot.EotError, GitError, OSError) as e:
+            sys.stderr.write(f"review-loop epic --check: {e}\n")
+            return 3
+        sys.stdout.write(f"{'current' if ok else 'not current'}: {why}\n")
+        return 0 if ok else 1
     out_dir = None
     try:
         record, out_dir = run(".", args.slug, args.base or eot.default_base("."), prd=args.prd, intent_text=args.intent,

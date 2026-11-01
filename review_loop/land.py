@@ -2,7 +2,8 @@
 
 The tier is recomputed here (risk.assess) on the PR's head as GitHub has it, against a freshly fetched base: a
 label, the PR text or the local checkout never count. Low also means a clean eot/recheck record for exactly
-that content. The PR must be open, not a draft, mergeable, with no pending or failing checks. The merge is a
+that content; an epic PR (head branch epic/<slug>) also needs a current `review-loop epic` record with nothing
+open, keyed by (patch-id, merge-base). The PR must be open, not a draft, mergeable, with no pending or failing checks. The merge is a
 rebase-merge pinned with --match-head-commit, so a push after the check makes GitHub refuse it.
 
 Everything else is refused with "waiting for a human" and the reasons. Each run is a line in <state>/land.jsonl.
@@ -18,7 +19,7 @@ import re
 import subprocess
 import sys
 
-from . import risk, scan
+from . import epic, risk, scan
 from .gitdiff import GitError, git
 from .secret_scan import state_dir
 
@@ -106,6 +107,11 @@ def run(repo: str, pr: str, gh=default_gh, scan_fn=default_scan) -> tuple[int, s
         if s.get("exit_code") != 0:
             refused.append(f"scan of the PR commits: exit {s.get('exit_code')}, "
                            f"{sum(f.get('status') in ('hard', 'needs_human', 'blocking') for f in s.get('findings', []))} finding(s)")
+        if head_ref.startswith("epic/"):
+            ok, why = epic.current_record(repo, f"origin/{base}", sha)
+            row["epic_record"] = ok
+            if not ok:
+                refused.append(f"epic review: {why}: run `review-loop epic {head_ref[len('epic/'):]}`")
         row["tier"] = r["tier"]
         if r["tier"] != "low":
             refused.append(f"risk:{r['tier']}: " + "; ".join(r["reasons"]))

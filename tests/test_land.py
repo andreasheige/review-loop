@@ -73,6 +73,23 @@ class LandTest(unittest.TestCase):
             "command": "eot", "round": 1, "head": sha, "branch": "feat", "created_at": "2026-10-30T00:00:01+00:00",
             "findings": list(findings), "outcome": {"exit_code": exit_code}}))
 
+    def epic_record(self, sha, base_ref="main", findings=(), exit_code=0):
+        mb = self.git("merge-base", base_ref, sha)
+        pid = eot.patch_id(str(self.repo), mb, sha)
+        d = self.repo / ".git" / "review-loop" / pid / f"epic-{mb}"
+        d.mkdir(parents=True)
+        (d / "record.json").write_text(json.dumps({
+            "command": "epic", "head": sha, "branch": "epic/x", "key": {"patch_id": pid, "merge_base": mb},
+            "created_at": "2026-11-01T00:00:01+00:00", "findings": list(findings), "outcome": {"exit_code": exit_code}}))
+
+    def epic_pr(self, path="docs/guide.md", text="# Guide\n", epic_reviewed=True):
+        """A low-risk-looking change on epic/x (eot-reviewed, so only the epic check can refuse it)."""
+        sha = self.pushed(path, text)
+        if epic_reviewed:
+            self.epic_record(sha)
+        self.git("push", "-q", "origin", "feat:refs/heads/epic/x")
+        return sha
+
     def pushed(self, path, text, reviewed=True):
         sha = self.commit(path, text)
         if reviewed:
@@ -126,6 +143,66 @@ class LandTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("review", msg)
         self.assertEqual(gh.merged(), [])
+
+    # epic PRs (head branch epic/<slug>): a current review-loop epic record is required, whatever the tier
+    def test_epic_pr_without_an_epic_record_is_refused(self):
+        sha = self.epic_pr(epic_reviewed=False)
+        gh = FakeGh(self.pr(sha, headRefName="epic/x"))
+        code, msg = self.land(gh)
+        self.assertEqual(code, 1, msg)
+        self.assertIn("review-loop epic x", msg)
+        self.assertEqual(gh.merged(), [])
+
+    def test_epic_pr_with_a_current_clean_epic_record_lands(self):
+        sha = self.epic_pr()
+        gh = FakeGh(self.pr(sha, headRefName="epic/x"))
+        code, msg = self.land(gh)
+        self.assertEqual(code, 0, msg)
+        self.assertEqual(len(gh.merged()), 1)
+
+    def test_epic_record_from_before_main_moved_forces_a_rerun(self):
+        old = self.epic_pr()
+        self.git("switch", "-q", "main")
+        self.commit("CHANGELOG.md", "moved\n")
+        self.git("push", "-q", "origin", "main")
+        self.git("switch", "-q", "feat")
+        self.git("rebase", "-q", "main")
+        sha = self.git("rev-parse", "HEAD")
+        self.assertNotEqual(old, sha)
+        # same content, so the same patch-id and eot record; only the merge-base moved
+        self.git("push", "-q", "-f", "origin", "feat:refs/heads/epic/x")
+        gh = FakeGh(self.pr(sha, headRefName="epic/x"))
+        code, msg = self.land(gh)
+        self.assertEqual(code, 1, msg)
+        self.assertIn("review-loop epic x", msg)
+        self.assertEqual(gh.merged(), [])
+
+    def test_epic_record_with_an_open_finding_or_an_error_is_refused(self):
+        for kw in ({"findings": [{"id": "rev-1", "status": "blocking", "rule_class": None}], "exit_code": 1},
+                   {"exit_code": 3}):
+            with self.subTest(**{k: str(v)[:30] for k, v in kw.items()}):
+                self.git("switch", "-q", "-C", "feat", "main")
+                sha = self.commit("docs/guide.md", "# Guide\n" + str(kw))
+                self.record(sha)
+                self.epic_record(sha, **kw)
+                self.git("push", "-q", "-f", "origin", "feat:refs/heads/epic/x")
+                gh = FakeGh(self.pr(sha, headRefName="epic/x"))
+                code, msg = self.land(gh)
+                self.assertEqual(code, 1, msg)
+                self.assertIn("epic review", msg)
+                self.assertEqual(gh.merged(), [])
+
+    def test_epic_check_cli_reports_whether_the_record_is_current(self):
+        from review_loop import epic
+        sha = self.commit("docs/guide.md", "# Guide\n")
+        self.git("branch", "epic/x", sha)
+        cwd = os.getcwd()
+        os.chdir(self.repo)
+        self.addCleanup(os.chdir, cwd)
+        self.assertEqual(epic.main(["x", "--check", "--base", "main"]), 1)
+        self.epic_record(sha)
+        self.assertEqual(epic.main(["x", "--check", "--base", "main"]), 0)
+        self.assertEqual(epic.main(["nope", "--check", "--base", "main"]), 3)
 
     def test_pending_or_failing_checks_are_refused(self):
         sha = self.pushed("docs/guide.md", "# Guide\n")
