@@ -1,6 +1,6 @@
 # review-loop contract
 
-The shared contract between the review loop and the security loop: one CLI, one record, one status set, one gate. Written before any code. Design: `~/.autograph/vault/deep_dives/2026-10-26-review-security-integration.md` ("Shared contract").
+The shared contract between the review loop and the security loop: one CLI, one record, one status set, one gate. Written before any code.
 
 | File | What it is |
 |---|---|
