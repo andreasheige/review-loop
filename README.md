@@ -44,3 +44,7 @@ Tests: `python3 -m unittest discover -s tests`.
 - `bin/review-loop accept <finding-id> --reason … [--expires YYYY-MM-DD] [--rule-class …]`: a human's override, typed at a terminal; per (finding id, rule class), security classes expire within 90 days.
 - `bin/review-loop label <finding-id> fixed|wrong|intentional|noise` (human labels need a `y` at the terminal; an agent may give `fixed`/`noise` with `--evidence`, counted apart) and `bin/review-loop stats [--repo PATH]... [--csv PATH]` (counts only; `--csv` appends `date,metric,key,value` rows).
 - `bin/review-loop worker …`: one finder or verifier run, for debugging prompts.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
