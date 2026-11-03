@@ -142,6 +142,26 @@ class PolicyTest(RepoCase):
         self.commit("move")
         self.assertIn("deleted-assertion", self.rules(self.scan()))
 
+    def test_test_moved_to_another_test_path_keeps_its_assertions(self):
+        self.write("tests/test_a.py", "def test_a():\n    assert 1 == 1\n    assert 2 == 2\n")
+        self.commit("test")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        os.makedirs(self.repo / "app")
+        self.git("mv", "tests", "app/tests")
+        self.commit("move")
+        self.assertNotIn("deleted-assertion", self.rules(self.scan()))
+
+    def test_assertion_dropped_while_moving_a_test_is_still_caught(self):
+        self.write("tests/test_a.py", "def test_a():\n    assert 1 == 1\n    assert 2 == 2\n    x = 1\n    y = 2\n")
+        self.commit("test")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        os.makedirs(self.repo / "app")
+        self.git("mv", "tests", "app/tests")
+        self.write("app/tests/test_a.py", "def test_a():\n    assert 1 == 1\n    x = 1\n    y = 2\n")
+        self.commit("move and relax")
+        f = self.rules(self.scan())["deleted-assertion"]
+        self.assertEqual((f["sites"][0]["path"], f["sites"][0]["start_line"]), ("tests/test_a.py", 3))
+
     def test_added_skip_marker_in_a_test(self):
         self.write("tests/test_a.py", "import pytest\n\n\n@pytest.mark.skip\ndef test_a():\n    assert 1\n")
         self.commit("test")
