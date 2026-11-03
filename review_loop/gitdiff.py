@@ -48,10 +48,10 @@ def added_lines(repo: str, staged: bool, base: str | None = None, head: str | No
 
 
 def removed_lines(repo: str, staged: bool, base: str | None = None, head: str | None = None,
-                  text: bool = False) -> dict[str, dict[int, str]]:
-    """Like added_lines, for the old side: {old path: {old line number: text}}. No rename detection, so a file
-    moved elsewhere shows every line as removed."""
-    return _lines(repo, staged, base, head, removed=True, text=text, renames=False)
+                  text: bool = False, renames: bool = False) -> dict[str, dict[int, str]]:
+    """Like added_lines, for the old side: {old path: {old line number: text}}. By default no rename detection,
+    so a file moved elsewhere shows every line as removed; renames=True shows only what the move changed."""
+    return _lines(repo, staged, base, head, removed=True, text=text, renames=renames)
 
 
 def _lines(repo, staged, base, head, removed: bool, text: bool, renames: bool) -> dict[str, dict[int, str]]:

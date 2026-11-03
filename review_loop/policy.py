@@ -80,6 +80,21 @@ def changed_paths(repo: str, staged: bool, base: str | None, head: str | None) -
     return [c[0] for c in changed(repo, staged, base, head)]
 
 
+def renamed(repo: str, staged: bool, base: str | None, head: str | None) -> dict[str, str]:
+    """{old path: new path} for every file git detects as moved (-M)."""
+    out = gitdiff.git(repo, "diff", "--name-status", "-z", "-M",
+                      *gitdiff.diff_args(staged, base, head)).stdout.decode("utf-8", "replace").split("\0")
+    res, i = {}, 0
+    while i < len(out):
+        if out[i].startswith(("R", "C")) and i + 2 < len(out):
+            if out[i].startswith("R"):
+                res[out[i + 1]] = out[i + 2]
+            i += 3
+        else:
+            i += 2 if out[i] else 1
+    return res
+
+
 def is_test(path: str) -> bool:
     return any(fnmatch.fnmatch(path, g) for g in TEST_FILES)
 
@@ -114,9 +129,15 @@ def scan(repo: str, staged: bool, base: str | None, head: str | None) -> list[di
                                normalise.sha1(text.strip() + "\n" + lines.get(n + 1, "").strip())))
             elif is_test(path) and SKIP_TEST.search(text):
                 out.append(hit("skipped-test", path, n, f"Test skipped or focused in {path}", normalise.sha1(text.strip())))
+    # A test moved to another test path keeps its assertions: only the lines the move itself dropped count.
+    # A test moved out of the test tree still counts as every assertion removed (it no longer runs as a test).
+    moved = {old: new for old, new in renamed(repo, staged, base, head).items() if is_test(old) and is_test(new)}
+    kept = gitdiff.removed_lines(repo, staged, base, head, text=True, renames=True) if moved else {}
     for path, lines in text_lines(repo, staged, base, head, removed=True).items():
         if not is_test(path):
             continue
+        if path in moved:
+            lines = kept.get(path, {})
         for n, text in lines.items():
             if ASSERTION.search(text):
                 out.append(hit("deleted-assertion", path, n, f"Assertion removed from {path}",
