@@ -39,12 +39,14 @@ def find(common: Path, finding_id: str) -> tuple[dict, dict] | None:
     return max(hits, key=lambda x: x[0]["created_at"]) if hits else None
 
 
-def confirm_on_tty(question: str) -> bool:
+def confirm_on_tty(question: str, tty: str = "/dev/tty") -> bool:
+    # Separate write and read handles: open(tty, "r+") builds a seekable text stream, and a terminal is not
+    # seekable, so it raised UnsupportedOperation (an OSError) and every prompt answered "no" unasked.
     try:
-        with open("/dev/tty", "r+") as tty:
-            tty.write(f"{question} [y/N] ")
-            tty.flush()
-            return tty.readline().strip().lower() == "y"
+        with open(tty, "w") as out, open(tty) as inp:
+            out.write(f"{question} [y/N] ")
+            out.flush()
+            return inp.readline().strip().lower() == "y"
     except OSError:
         return False
 

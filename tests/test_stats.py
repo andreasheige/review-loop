@@ -82,3 +82,26 @@ class StatsTest(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfirmOnTtyTest(unittest.TestCase):
+    """The real prompt, on a real terminal (a pty), with nothing injected."""
+
+    def ask(self, typed: bytes) -> bool:
+        import pty
+        master, slave = pty.openpty()
+        try:
+            os.write(master, typed)
+            return stats.confirm_on_tty("Accept?", tty=os.ttyname(slave))
+        finally:
+            os.close(master)
+            os.close(slave)
+
+    def test_y_on_a_terminal_is_a_yes(self):
+        self.assertTrue(self.ask(b"y\n"))
+
+    def test_anything_else_on_a_terminal_is_a_no(self):
+        self.assertFalse(self.ask(b"n\n"))
+
+    def test_no_terminal_is_a_no(self):
+        self.assertFalse(stats.confirm_on_tty("Accept?", tty="/nonexistent/tty"))
