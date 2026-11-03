@@ -15,6 +15,7 @@ Runs only when asked (`scan --policy`, eot, recheck): the pre-commit hook keeps 
 from __future__ import annotations
 
 import fnmatch
+import posixpath
 import re
 
 from . import gitdiff, normalise
@@ -129,9 +130,11 @@ def scan(repo: str, staged: bool, base: str | None, head: str | None) -> list[di
                                normalise.sha1(text.strip() + "\n" + lines.get(n + 1, "").strip())))
             elif is_test(path) and SKIP_TEST.search(text):
                 out.append(hit("skipped-test", path, n, f"Test skipped or focused in {path}", normalise.sha1(text.strip())))
-    # A test moved to another test path keeps its assertions: only the lines the move itself dropped count.
-    # A test moved out of the test tree still counts as every assertion removed (it no longer runs as a test).
-    moved = {old: new for old, new in renamed(repo, staged, base, head).items() if is_test(old) and is_test(new)}
+    # A test moved to another folder under the same file name keeps its assertions: only the lines the move
+    # itself dropped count. Any other rename (out of the test tree, or to a name a runner may not collect, such
+    # as tests/test_auth.py -> tests/auth.txt) still counts as every assertion removed.
+    moved = {old: new for old, new in renamed(repo, staged, base, head).items()
+             if is_test(old) and is_test(new) and posixpath.basename(old) == posixpath.basename(new)}
     kept = gitdiff.removed_lines(repo, staged, base, head, text=True, renames=True) if moved else {}
     for path, lines in text_lines(repo, staged, base, head, removed=True).items():
         if not is_test(path):

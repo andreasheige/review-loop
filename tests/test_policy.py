@@ -151,6 +151,14 @@ class PolicyTest(RepoCase):
         self.commit("move")
         self.assertNotIn("deleted-assertion", self.rules(self.scan()))
 
+    def test_test_renamed_to_an_undiscoverable_name_in_tests_is_still_caught(self):
+        self.write("tests/test_auth.py", "def test_auth():\n    assert allowed() is False\n")
+        self.commit("test")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.git("mv", "tests/test_auth.py", "tests/auth.txt")
+        self.commit("archive")
+        self.assertIn("deleted-assertion", self.rules(self.scan()))
+
     def test_assertion_dropped_while_moving_a_test_is_still_caught(self):
         self.write("tests/test_a.py", "def test_a():\n    assert 1 == 1\n    assert 2 == 2\n    x = 1\n    y = 2\n")
         self.commit("test")
