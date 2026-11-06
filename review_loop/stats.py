@@ -39,12 +39,14 @@ def find(common: Path, finding_id: str) -> tuple[dict, dict] | None:
     return max(hits, key=lambda x: x[0]["created_at"]) if hits else None
 
 
-def confirm_on_tty(question: str) -> bool:
+def confirm_on_tty(question: str, path: str = "/dev/tty") -> bool:
+    # Read and write as two handles: a tty is not seekable, and a text-mode "r+" open of one fails on
+    # macOS (io.UnsupportedOperation, an OSError), which read as "no human here" and never asked.
     try:
-        with open("/dev/tty", "r+") as tty:
-            tty.write(f"{question} [y/N] ")
-            tty.flush()
-            return tty.readline().strip().lower() == "y"
+        with open(path, "w") as out, open(path) as inp:
+            out.write(f"{question} [y/N] ")
+            out.flush()
+            return inp.readline().strip().lower() == "y"
     except OSError:
         return False
 

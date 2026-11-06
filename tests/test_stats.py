@@ -82,3 +82,32 @@ class StatsTest(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfirmOnTtyTest(unittest.TestCase):
+    """The prompt behind label and accept, on a real pseudo-terminal: a tty is not seekable, which a
+    text-mode "r+" open refuses on macOS (io.UnsupportedOperation, an OSError), so no prompt ever showed."""
+
+    def ask(self, typed: bytes) -> tuple[bool, bytes]:
+        import pty
+        master, slave = pty.openpty()
+        try:
+            os.write(master, typed)
+            answer = stats.confirm_on_tty("Accept it?", path=os.ttyname(slave))
+            shown = os.read(master, 1024)
+        finally:
+            os.close(master)
+            os.close(slave)
+        return answer, shown
+
+    def test_y_on_a_real_tty_accepts_and_the_question_is_shown(self):
+        answer, shown = self.ask(b"y\n")
+        self.assertTrue(answer)
+        self.assertIn(b"Accept it? [y/N]", shown)
+
+    def test_anything_but_y_refuses(self):
+        for typed in (b"\n", b"n\n", b"yes please\n"):
+            self.assertFalse(self.ask(typed)[0], typed)
+
+    def test_no_tty_refuses(self):
+        self.assertFalse(stats.confirm_on_tty("Accept it?", path="/nonexistent/tty"))
